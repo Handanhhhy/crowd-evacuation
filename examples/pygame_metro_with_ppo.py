@@ -104,12 +104,18 @@ class MetroStationWithPPO:
 
     def load_ppo_model(self):
         """加载训练好的PPO模型"""
-        model_path = project_root / "outputs" / "models" / "ppo_evacuation.zip"
+        # 优先加载地铁站专用模型
+        metro_model_path = project_root / "outputs" / "models" / "ppo_metro.zip"
+        fallback_model_path = project_root / "outputs" / "models" / "ppo_evacuation.zip"
+
+        model_path = metro_model_path if metro_model_path.exists() else fallback_model_path
 
         if model_path.exists() and self.use_ppo:
             try:
                 self.ppo_model = PPO.load(str(model_path))
                 print(f"PPO模型已加载: {model_path}")
+                if "metro" in str(model_path):
+                    print("  (使用地铁站专用3出口模型)")
                 return True
             except Exception as e:
                 print(f"加载PPO模型失败: {e}")
@@ -117,6 +123,7 @@ class MetroStationWithPPO:
                 return False
         else:
             print("未找到PPO模型或未启用PPO")
+            print("  提示: 运行 python examples/train_ppo_metro.py 训练地铁站模型")
             return False
 
     def world_to_screen(self, pos):
@@ -196,7 +203,7 @@ class MetroStationWithPPO:
         return self.exits[choice]['position'].copy()
 
     def get_ppo_observation(self):
-        """获取PPO模型的观测状态"""
+        """获取PPO模型的观测状态 (8维，适配3出口)"""
         # 计算各出口附近的密度和拥堵度
         exit_densities = []
         exit_congestions = []
@@ -212,12 +219,10 @@ class MetroStationWithPPO:
         # 时间比例
         time_ratio = min(self.step_count / 1000, 1.0)
 
-        # 构建观测 (与训练时的环境保持一致)
-        # 注意：训练环境是2个出口，这里是3个出口，需要适配
-        # 简化处理：取前2个出口的数据
+        # 构建观测 (8维: 3出口密度 + 3出口拥堵度 + 剩余比例 + 时间比例)
         obs = np.array([
-            exit_densities[0], exit_densities[1],
-            exit_congestions[0], exit_congestions[1],
+            exit_densities[0], exit_densities[1], exit_densities[2],
+            exit_congestions[0], exit_congestions[1], exit_congestions[2],
             remaining_ratio, time_ratio
         ], dtype=np.float32)
 
@@ -244,43 +249,40 @@ class MetroStationWithPPO:
         return density, congestion
 
     def apply_ppo_guidance(self):
-        """应用PPO引导策略"""
+        """应用PPO引导策略 (适配3出口模型)"""
         if self.ppo_model is None:
             return
 
         # 获取观测
         obs = self.get_ppo_observation()
 
-        # PPO决策
+        # PPO决策 (action: 0=A, 1=B, 2=C)
         action, _ = self.ppo_model.predict(obs, deterministic=True)
         self.current_action = int(action)
 
-        # 将PPO的出口选择映射到3个出口
-        # action=0 -> 出口A, action=1 -> 出口B
-        # 额外逻辑：如果出口A/B拥堵，引导去出口C
-        recommended_exit = self.current_action
-
-        # 检查推荐出口的拥堵情况
-        _, congestion = self._compute_exit_metrics(self.exits[recommended_exit]['position'])
-        if congestion > 0.6:
-            # 拥堵时考虑出口C
-            recommended_exit = 2
+        # 直接使用PPO推荐的出口 (0=A, 1=B, 2=C)
+        recommended_exit = min(self.current_action, 2)  # 确保在有效范围内
 
         # 引导部分行人改变目标
         target_pos = self.exits[recommended_exit]['position']
 
         for ped in self.model.pedestrians:
-            # 只有在大厅区域的行人才响应引导
+            # 只有在大厅区域的行人才响应引导（已过闸机）
             if ped.position[0] > 22:
                 # 根据距离和随机因素决定是否听从引导
                 dist_to_current = np.linalg.norm(ped.position - ped.target)
                 dist_to_recommended = np.linalg.norm(ped.position - target_pos)
 
-                # 如果推荐出口更近或当前出口拥堵，有更高概率改变
-                if dist_to_recommended < dist_to_current * 1.2:
-                    prob = 0.15  # 15%的概率响应引导
+                # 如果推荐出口更近或差距不大，更有可能响应
+                if dist_to_recommended < dist_to_current * 1.3:
+                    prob = 0.2  # 20%的概率响应引导
                 else:
-                    prob = 0.05
+                    prob = 0.08
+
+                # 如果推荐出口不拥堵，提高响应概率
+                _, congestion = self._compute_exit_metrics(target_pos)
+                if congestion < 0.3:
+                    prob *= 1.5
 
                 if np.random.random() < prob:
                     ped.target = target_pos.copy()
@@ -425,7 +427,7 @@ class MetroStationWithPPO:
 
         # PPO状态
         if self.ppo_model is not None and self.use_ppo:
-            ppo_status = font_small.render("PPO智能引导: ON", True, PURPLE)
+            ppo_status = font_small.render("PPO智能引导: ON (3出口)", True, PURPLE)
             recommended = self.exits[min(self.current_action, 2)]['name']
             ppo_action = font_small.render(f"推荐出口: {recommended}", True, PURPLE)
         else:
