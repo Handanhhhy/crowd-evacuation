@@ -90,6 +90,7 @@ class MetroStationWithPPO:
         self.ppo_model = None
         self.current_action = 0  # 当前PPO推荐的出口
         self.ppo_update_interval = 10  # 每10步更新一次PPO决策
+        self.is_metro_model = False  # 是否使用地铁站专用模型（3出口）
 
         # 状态
         self.model = None
@@ -108,14 +109,24 @@ class MetroStationWithPPO:
         metro_model_path = project_root / "outputs" / "models" / "ppo_metro.zip"
         fallback_model_path = project_root / "outputs" / "models" / "ppo_evacuation.zip"
 
-        model_path = metro_model_path if metro_model_path.exists() else fallback_model_path
+        if metro_model_path.exists():
+            model_path = metro_model_path
+            self.is_metro_model = True
+        elif fallback_model_path.exists():
+            model_path = fallback_model_path
+            self.is_metro_model = False
+        else:
+            model_path = None
 
-        if model_path.exists() and self.use_ppo:
+        if model_path is not None and self.use_ppo:
             try:
                 self.ppo_model = PPO.load(str(model_path))
                 print(f"PPO模型已加载: {model_path}")
-                if "metro" in str(model_path):
-                    print("  (使用地铁站专用3出口模型)")
+                if self.is_metro_model:
+                    print("  (使用地铁站专用3出口模型，观测维度=8)")
+                else:
+                    print("  (使用旧版2出口模型，观测维度=6)")
+                    print("  提示: 运行 python examples/train_ppo_metro.py 训练地铁站专用模型")
                 return True
             except Exception as e:
                 print(f"加载PPO模型失败: {e}")
@@ -203,7 +214,11 @@ class MetroStationWithPPO:
         return self.exits[choice]['position'].copy()
 
     def get_ppo_observation(self):
-        """获取PPO模型的观测状态 (8维，适配3出口)"""
+        """获取PPO模型的观测状态
+
+        - 地铁站模型 (is_metro_model=True): 8维 (3出口)
+        - 旧版模型 (is_metro_model=False): 6维 (2出口)
+        """
         # 计算各出口附近的密度和拥堵度
         exit_densities = []
         exit_congestions = []
@@ -219,12 +234,20 @@ class MetroStationWithPPO:
         # 时间比例
         time_ratio = min(self.step_count / 1000, 1.0)
 
-        # 构建观测 (8维: 3出口密度 + 3出口拥堵度 + 剩余比例 + 时间比例)
-        obs = np.array([
-            exit_densities[0], exit_densities[1], exit_densities[2],
-            exit_congestions[0], exit_congestions[1], exit_congestions[2],
-            remaining_ratio, time_ratio
-        ], dtype=np.float32)
+        if self.is_metro_model:
+            # 8维观测: 3出口密度 + 3出口拥堵度 + 剩余比例 + 时间比例
+            obs = np.array([
+                exit_densities[0], exit_densities[1], exit_densities[2],
+                exit_congestions[0], exit_congestions[1], exit_congestions[2],
+                remaining_ratio, time_ratio
+            ], dtype=np.float32)
+        else:
+            # 6维观测 (兼容旧版2出口模型): 2出口密度 + 2出口拥堵度 + 剩余比例 + 时间比例
+            obs = np.array([
+                exit_densities[0], exit_densities[1],
+                exit_congestions[0], exit_congestions[1],
+                remaining_ratio, time_ratio
+            ], dtype=np.float32)
 
         return np.clip(obs, 0.0, 1.0)
 
@@ -249,19 +272,32 @@ class MetroStationWithPPO:
         return density, congestion
 
     def apply_ppo_guidance(self):
-        """应用PPO引导策略 (适配3出口模型)"""
+        """应用PPO引导策略
+
+        - 地铁站模型: action 0=A, 1=B, 2=C (直接映射)
+        - 旧版模型: action 0=A, 1=B (需要额外逻辑处理出口C)
+        """
         if self.ppo_model is None:
             return
 
         # 获取观测
         obs = self.get_ppo_observation()
 
-        # PPO决策 (action: 0=A, 1=B, 2=C)
+        # PPO决策
         action, _ = self.ppo_model.predict(obs, deterministic=True)
         self.current_action = int(action)
 
-        # 直接使用PPO推荐的出口 (0=A, 1=B, 2=C)
-        recommended_exit = min(self.current_action, 2)  # 确保在有效范围内
+        if self.is_metro_model:
+            # 地铁站模型: 直接使用3出口映射 (0=A, 1=B, 2=C)
+            recommended_exit = min(self.current_action, 2)
+        else:
+            # 旧版模型: 只有2个动作 (0=A, 1=B)
+            recommended_exit = self.current_action
+
+            # 检查推荐出口的拥堵情况，如果拥堵则考虑出口C
+            _, congestion = self._compute_exit_metrics(self.exits[recommended_exit]['position'])
+            if congestion > 0.6:
+                recommended_exit = 2  # 拥堵时引导去出口C
 
         # 引导部分行人改变目标
         target_pos = self.exits[recommended_exit]['position']
@@ -427,7 +463,8 @@ class MetroStationWithPPO:
 
         # PPO状态
         if self.ppo_model is not None and self.use_ppo:
-            ppo_status = font_small.render("PPO智能引导: ON (3出口)", True, PURPLE)
+            model_type = "3出口" if self.is_metro_model else "2出口"
+            ppo_status = font_small.render(f"PPO智能引导: ON ({model_type})", True, PURPLE)
             recommended = self.exits[min(self.current_action, 2)]['name']
             ppo_action = font_small.render(f"推荐出口: {recommended}", True, PURPLE)
         else:
