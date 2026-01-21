@@ -1,0 +1,112 @@
+# Trajectron++ Configuration
+# Trajectory prediction model for crowd evacuation
+
+# Model architecture
+model:
+  obs_len: 8              # Observation length (frames)
+  pred_len: 12            # Prediction length (frames)
+  embedding_dim: 64       # Position embedding dimension
+  hidden_dim: 128         # LSTM hidden dimension
+  num_modes: 5            # Number of prediction modes (GMM components)
+  num_heads: 4            # Number of attention heads
+  dropout: 0.1            # Dropout rate
+  use_edge_encoder: true  # Use agent-agent interactions
+
+# Training configuration
+training:
+  batch_size: 64
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  epochs: 100
+  early_stopping_patience: 20
+  gradient_clip: 5.0
+
+  # Loss weights
+  min_ade_weight: 1.0
+  mode_diversity_weight: 0.1
+
+  # Learning rate scheduler
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.5
+    patience: 10
+
+# Data configuration
+data:
+  # Available datasets
+  train_datasets:
+    - eth_ucy
+    # - sdd           # Stanford Drone Dataset (if available)
+    # - grand_central # Grand Central Station (if available)
+
+  # Data augmentation
+  augmentation:
+    enabled: true
+    rotation: true        # Random rotation +-30 degrees
+    scaling: true         # Random scaling 0.8x-1.2x
+    horizontal_flip: true
+    vertical_flip: true
+    velocity_noise: 0.02  # Gaussian noise sigma
+
+  # Scene parameters
+  scale: 1.0              # Coordinate scaling factor
+
+# Evaluation metrics
+evaluation:
+  # Primary metrics
+  metrics:
+    - minADE    # Minimum Average Displacement Error (best mode)
+    - minFDE    # Minimum Final Displacement Error (best mode)
+    - bestADE   # ADE of most probable mode
+    - bestFDE   # FDE of most probable mode
+    - weightedADE  # Probability-weighted ADE
+    - weightedFDE  # Probability-weighted FDE
+
+  # Target performance (for reference)
+  targets:
+    minADE: 0.30  # meters
+    minFDE: 0.50  # meters
+
+# Model comparison baseline
+baseline:
+  # Social-LSTM (Alahi et al. 2016)
+  social_lstm:
+    typical_ade: 0.50
+    typical_fde: 1.00
+
+  # Constant velocity
+  constant_velocity:
+    typical_ade: 1.00
+    typical_fde: 2.00
+
+# Output paths
+output:
+  model_path: "outputs/models/trajectron.pt"
+  log_dir: "outputs/logs/trajectron"
+
+# Device configuration
+device: "auto"  # auto, cpu, cuda, or mps
+
+# Logging
+logging:
+  level: "INFO"
+  tensorboard: false
+  wandb: false
+
+# Notes
+# -----
+# This configuration is optimized for crowd evacuation scenarios.
+#
+# Key differences from standard Trajectron++:
+# 1. Shorter prediction horizon (12 steps vs 25 in original paper)
+# 2. Fewer modes (5 vs 25) for computational efficiency
+# 3. Focus on indoor/station environments vs outdoor streets
+#
+# For best results:
+# 1. Train on Grand Central Station data (most similar to metro)
+# 2. Enable data augmentation
+# 3. Use edge encoder for dense crowd scenarios
+#
+# Training time estimate:
+# - CPU: ~2-4 hours for 100 epochs
+# - CUDA GPU: ~20-40 minutes for 100 epochs

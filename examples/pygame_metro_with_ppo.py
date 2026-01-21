@@ -279,7 +279,7 @@ class MetroStationWithPPO:
             return False
 
     def load_trajectory_predictor(self):
-        """加载Social-LSTM轨迹预测器"""
+        """加载轨迹预测器 (支持Social-LSTM和Trajectron++)"""
         if not TRAJECTORY_PREDICTOR_AVAILABLE:
             print("Trajectory Predictor module not available")
             return False
@@ -288,25 +288,45 @@ class MetroStationWithPPO:
             print("Neural trajectory prediction disabled")
             return False
 
+        # 优先加载Trajectron++，回退到Social-LSTM
+        trajectron_path = project_root / "outputs" / "models" / "trajectron.pt"
         lstm_model_path = project_root / "outputs" / "models" / "social_lstm.pt"
+
+        # 选择模型路径
+        if trajectron_path.exists():
+            model_path = str(trajectron_path)
+            model_type = 'trajectron'
+        elif lstm_model_path.exists():
+            model_path = str(lstm_model_path)
+            model_type = 'social_lstm'
+        else:
+            model_path = None
+            model_type = 'auto'
 
         try:
             self.trajectory_predictor = TrajectoryPredictor(
-                model_path=str(lstm_model_path) if lstm_model_path.exists() else None,
+                model_path=model_path,
                 obs_len=8,
                 pred_len=12,
-                device='cpu'
+                device='cpu',
+                model_type=model_type
             )
             # 立即触发模型加载
             self.trajectory_predictor._ensure_model_loaded()
             self.trajectory_loaded = True
 
             if self.trajectory_predictor.use_neural_network:
-                print(f"Social-LSTM Trajectory Predictor loaded: {lstm_model_path}")
-                print("  Mode: Neural Network (Social-LSTM)")
+                actual_type = self.trajectory_predictor.actual_model_type
+                if actual_type == 'trajectron':
+                    print(f"Trajectron++ Trajectory Predictor loaded: {trajectron_path}")
+                    print("  Mode: Multi-modal GNN (Trajectron++)")
+                else:
+                    print(f"Social-LSTM Trajectory Predictor loaded: {lstm_model_path}")
+                    print("  Mode: Neural Network (Social-LSTM)")
             else:
-                print("Social-LSTM model not found, using linear extrapolation")
-                print("  Hint: Run 'python examples/train_trajectory.py' to train")
+                print("Trajectory model not found, using linear extrapolation")
+                print("  Hint: Run 'python examples/train_trajectron.py' (recommended)")
+                print("        or 'python examples/train_trajectory.py' (Social-LSTM)")
             return True
         except Exception as e:
             print(f"Failed to load Trajectory Predictor: {e}")
@@ -770,7 +790,11 @@ class MetroStationWithPPO:
         # Trajectory predictor status
         if self.trajectory_loaded:
             if self.trajectory_predictor and self.trajectory_predictor.use_neural_network:
-                traj_status = font_small.render("Social-LSTM: ON", True, CYAN)
+                actual_type = self.trajectory_predictor.actual_model_type
+                if actual_type == 'trajectron':
+                    traj_status = font_small.render("Trajectron++: ON", True, CYAN)
+                else:
+                    traj_status = font_small.render("Social-LSTM: ON", True, CYAN)
             else:
                 traj_status = font_small.render("Trajectory: Linear", True, YELLOW)
         else:
@@ -1144,7 +1168,7 @@ class MetroStationWithPPO:
 
         # 统计各出口目标人数，确定过载出口
         exit_target_count = {exit_info['id']: 0 for exit_info in self.exits}
-        for p in self.pedestrians:
+        for p in self.model.pedestrians:
             for exit_info in self.exits:
                 if np.linalg.norm(p.target - exit_info['position']) < 2.0:
                     exit_target_count[exit_info['id']] += 1
@@ -1380,13 +1404,14 @@ class MetroStationWithPPO:
 def main():
     print("=" * 60)
     print("Metro Station Evacuation Simulation - Hierarchical Guidance")
-    print("SFM + PPO + GBM + Social-LSTM + Predictive Guidance System")
+    print("SFM + PPO + GBM + Trajectron++/Social-LSTM + Predictive Guidance")
     print("=" * 60)
     print("\nModels:")
     print("  - Social Force Model (SFM): Pedestrian dynamics (Helbing 1995)")
     print("  - PPO Reinforcement Learning: Global exit recommendation")
     print("  - GBM Behavior Predictor: Based on ETH/UCY dataset")
-    print("  - Social-LSTM: Neural network trajectory prediction (Alahi 2016)")
+    print("  - Trajectron++: Multi-modal GNN trajectory prediction (Salzmann 2020)")
+    print("  - Social-LSTM: Single-modal trajectory prediction (Alahi 2016)")
     print("  - Pedestrian Types: Normal(70%), Elderly(15%), Child(10%), Impatient(5%)")
     print("  - Enhanced Behaviors: Waiting, Hesitation, Panic")
     print("\n== Hierarchical Predictive Guidance System ==")

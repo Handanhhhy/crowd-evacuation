@@ -1,14 +1,18 @@
 """
-Social-LSTM 轨迹预测器
-基于 Alahi et al. 2016 "Social LSTM: Human Trajectory Prediction in Crowded Spaces"
+Trajectory Prediction Module
+
+Supports multiple prediction models:
+1. Social-LSTM (Alahi et al. 2016) - Original implementation
+2. Trajectron++ (Salzmann et al. 2020) - Multi-modal GNN-based
 
 核心特点:
 - 使用LSTM编码器处理历史轨迹
 - Social Pooling层捕捉行人间的交互
 - LSTM解码器预测未来轨迹
+- Trajectron++: 多模态预测 + 图神经网络
 
 输入: 过去8帧位置 (8, 2) + 周围行人位置
-输出: 未来12帧位置 (12, 2)
+输出: 未来12帧位置 (12, 2) 或多条可能轨迹
 """
 
 import numpy as np
@@ -369,6 +373,7 @@ class TrajectoryPredictor:
     1. 管理历史轨迹缓冲区
     2. 批量预测所有行人的未来轨迹
     3. 角落陷阱检测
+    4. 支持多种预测模型 (Social-LSTM, Trajectron++)
     """
 
     def __init__(
@@ -376,14 +381,17 @@ class TrajectoryPredictor:
         model_path: Optional[str] = None,
         obs_len: int = 8,
         pred_len: int = 12,
-        device: str = 'cpu'
+        device: str = 'cpu',
+        model_type: str = 'auto'
     ):
         """
         Args:
-            model_path: Social-LSTM模型路径 (None则使用线性外推)
+            model_path: 模型路径 (None则使用线性外推)
             obs_len: 观测序列长度
             pred_len: 预测序列长度
             device: 运算设备
+            model_type: 模型类型 ('auto', 'social_lstm', 'trajectron')
+                       'auto' 会根据模型文件自动检测
         """
         self.obs_len = obs_len
         self.pred_len = pred_len
@@ -392,50 +400,141 @@ class TrajectoryPredictor:
         self.use_neural_network = False
         self._model_path = model_path
         self._model_loaded = False
+        self._model_type = model_type
+        self.actual_model_type = None  # 'social_lstm', 'trajectron', or None
 
         # 历史轨迹缓冲区: {ped_id: [(x, y), ...]}
         self.history_buffer: Dict[int, List[np.ndarray]] = {}
 
     def _ensure_model_loaded(self) -> bool:
-        """延迟加载模型 - 在首次需要时加载"""
+        """延迟加载模型 - 在首次需要时加载
+
+        支持两种模型类型:
+        1. Social-LSTM: 单模态LSTM预测
+        2. Trajectron++: 多模态GNN预测
+        """
         if self._model_loaded:
             return self.use_neural_network
 
         self._model_loaded = True
 
-        if self._model_path and Path(self._model_path).exists():
-            try:
-                # 使用CPU加载模型
-                checkpoint = torch.load(self._model_path, map_location='cpu', weights_only=False)
+        if not self._model_path:
+            print("轨迹预测器: 使用线性外推 (未指定模型路径)")
+            return False
 
-                # 创建模型实例
-                self.model = SocialLSTM(
-                    obs_len=checkpoint.get('obs_len', self.obs_len),
-                    pred_len=checkpoint.get('pred_len', self.pred_len),
-                    embedding_dim=checkpoint.get('embedding_dim', 64),
-                    hidden_dim=checkpoint.get('hidden_dim', 128),
-                    pool_dim=checkpoint.get('pool_dim', 64),
-                    grid_size=checkpoint.get('grid_size', 4),
-                    neighborhood_size=checkpoint.get('neighborhood_size', 2.0),
-                    dropout=0.0
-                )
+        model_path = Path(self._model_path)
 
-                self.model.load_state_dict(checkpoint['model_state_dict'])
-                # 强制使用CPU (避免Apple Silicon MPS问题)
-                self.model.to('cpu')
-                self.device = 'cpu'
-                self.model.eval()
+        # Auto-detect model type based on filename or try both
+        if self._model_type == 'auto':
+            # Check for Trajectron++ first (preferred)
+            trajectron_path = model_path.parent / 'trajectron.pt'
+            social_lstm_path = model_path.parent / 'social_lstm.pt'
 
-                self.use_neural_network = True
-                print(f"轨迹预测器: Social-LSTM已加载 (obs={self.model.obs_len}, pred={self.model.pred_len})")
-                return True
-            except Exception as e:
-                print(f"加载Social-LSTM失败: {e}")
-                self.use_neural_network = False
+            if model_path.name == 'trajectron.pt' or (trajectron_path.exists() and not model_path.exists()):
+                self._model_type = 'trajectron'
+                if not model_path.exists():
+                    self._model_path = str(trajectron_path)
+            elif model_path.name == 'social_lstm.pt' or social_lstm_path.exists():
+                self._model_type = 'social_lstm'
+            else:
+                # Try to detect from checkpoint
+                if model_path.exists():
+                    try:
+                        checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+                        if 'config' in checkpoint and 'num_modes' in checkpoint.get('config', {}):
+                            self._model_type = 'trajectron'
+                        else:
+                            self._model_type = 'social_lstm'
+                    except Exception:
+                        self._model_type = 'social_lstm'
+                else:
+                    print("轨迹预测器: 使用线性外推 (未找到模型文件)")
+                    return False
+
+        # Load the appropriate model
+        if self._model_type == 'trajectron':
+            return self._load_trajectron_model()
+        else:
+            return self._load_social_lstm_model()
+
+    def _load_trajectron_model(self) -> bool:
+        """加载Trajectron++模型"""
+        model_path = Path(self._model_path)
+
+        # Try trajectron.pt if current path doesn't exist
+        if not model_path.exists():
+            trajectron_path = model_path.parent / 'trajectron.pt'
+            if trajectron_path.exists():
+                model_path = trajectron_path
+            else:
+                print(f"Trajectron++模型未找到: {self._model_path}")
+                return self._load_social_lstm_model()  # Fallback
+
+        try:
+            # Import Trajectron++
+            from ml.trajectron import TrajectronPlusPlus
+
+            # Load model
+            self.model = TrajectronPlusPlus.load(str(model_path), device='cpu')
+            self.device = 'cpu'
+            self.model.eval()
+
+            self.use_neural_network = True
+            self.actual_model_type = 'trajectron'
+            print(f"轨迹预测器: Trajectron++已加载 (obs={self.model.obs_len}, "
+                  f"pred={self.model.pred_len}, modes={self.model.num_modes})")
+            return True
+
+        except Exception as e:
+            print(f"加载Trajectron++失败: {e}")
+            print("尝试回退到Social-LSTM...")
+            self._model_type = 'social_lstm'
+            return self._load_social_lstm_model()
+
+    def _load_social_lstm_model(self) -> bool:
+        """加载Social-LSTM模型"""
+        model_path = Path(self._model_path)
+
+        # Try social_lstm.pt if current path doesn't exist
+        if not model_path.exists():
+            social_lstm_path = model_path.parent / 'social_lstm.pt'
+            if social_lstm_path.exists():
+                model_path = social_lstm_path
+            else:
+                print(f"Social-LSTM模型未找到: {self._model_path}")
                 print("轨迹预测器: 回退到线性外推")
                 return False
-        else:
-            print("轨迹预测器: 使用线性外推 (未找到神经网络模型)")
+
+        try:
+            # 使用CPU加载模型
+            checkpoint = torch.load(str(model_path), map_location='cpu', weights_only=False)
+
+            # 创建模型实例
+            self.model = SocialLSTM(
+                obs_len=checkpoint.get('obs_len', self.obs_len),
+                pred_len=checkpoint.get('pred_len', self.pred_len),
+                embedding_dim=checkpoint.get('embedding_dim', 64),
+                hidden_dim=checkpoint.get('hidden_dim', 128),
+                pool_dim=checkpoint.get('pool_dim', 64),
+                grid_size=checkpoint.get('grid_size', 4),
+                neighborhood_size=checkpoint.get('neighborhood_size', 2.0),
+                dropout=0.0
+            )
+
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            # 强制使用CPU (避免Apple Silicon MPS问题)
+            self.model.to('cpu')
+            self.device = 'cpu'
+            self.model.eval()
+
+            self.use_neural_network = True
+            self.actual_model_type = 'social_lstm'
+            print(f"轨迹预测器: Social-LSTM已加载 (obs={self.model.obs_len}, pred={self.model.pred_len})")
+            return True
+        except Exception as e:
+            print(f"加载Social-LSTM失败: {e}")
+            self.use_neural_network = False
+            print("轨迹预测器: 回退到线性外推")
             return False
 
     def update_history(self, ped_id: int, position: np.ndarray):
@@ -591,7 +690,12 @@ class TrajectoryPredictor:
         return True
 
     def _predict_with_neural_network(self, pedestrians: List) -> Dict[int, np.ndarray]:
-        """使用Social-LSTM进行批量预测"""
+        """使用神经网络进行批量预测
+
+        支持:
+        - Social-LSTM: 单模态预测
+        - Trajectron++: 多模态预测 (返回最可能的轨迹)
+        """
         predictions = {}
 
         try:
@@ -614,8 +718,16 @@ class TrajectoryPredictor:
 
             # 神经网络预测
             with torch.no_grad():
-                pred_traj = self.model(obs_traj_tensor, seq_start_end)
-                pred_traj = pred_traj.cpu().numpy()  # (pred_len, total_peds, 2)
+                if self.actual_model_type == 'trajectron':
+                    # Trajectron++: 使用predict方法获取最佳模式
+                    pred_traj = self.model.predict(
+                        obs_traj_tensor, seq_start_end, mode='best'
+                    )
+                    pred_traj = pred_traj.cpu().numpy()  # (pred_len, total_peds, 2)
+                else:
+                    # Social-LSTM
+                    pred_traj = self.model(obs_traj_tensor, seq_start_end)
+                    pred_traj = pred_traj.cpu().numpy()  # (pred_len, total_peds, 2)
 
             # 整理结果
             pred_traj = np.transpose(pred_traj, (1, 0, 2))  # (total_peds, pred_len, 2)
@@ -630,6 +742,87 @@ class TrajectoryPredictor:
                     ped.id, ped.position, ped.velocity
                 )
                 predictions[ped.id] = pred
+
+        return predictions
+
+    def predict_multimodal(
+        self,
+        pedestrians: List,
+        scene_bounds: Tuple[float, float, float, float] = None
+    ) -> Dict[int, Tuple[np.ndarray, np.ndarray]]:
+        """预测多模态轨迹 (仅Trajectron++支持)
+
+        Args:
+            pedestrians: 行人列表
+            scene_bounds: 场景边界
+
+        Returns:
+            predictions: {ped_id: (trajectories, probabilities)}
+                        trajectories: (num_modes, pred_len, 2)
+                        probabilities: (num_modes,)
+        """
+        if self.actual_model_type != 'trajectron':
+            # 单模态模型回退到标准预测
+            single_preds = self.predict_all_trajectories(pedestrians, scene_bounds)
+            return {
+                pid: (pred[np.newaxis, ...], np.array([1.0]))
+                for pid, pred in single_preds.items()
+            }
+
+        predictions = {}
+
+        # 延迟加载模型
+        self._ensure_model_loaded()
+
+        if not self.use_neural_network:
+            # 回退到单模态
+            single_preds = self.predict_all_trajectories(pedestrians, scene_bounds)
+            return {
+                pid: (pred[np.newaxis, ...], np.array([1.0]))
+                for pid, pred in single_preds.items()
+            }
+
+        try:
+            # 准备输入数据
+            obs_traj_list = []
+            ped_ids = []
+
+            for ped in pedestrians:
+                if ped.id not in self.history_buffer:
+                    continue
+                if len(self.history_buffer[ped.id]) < self.obs_len:
+                    continue
+                history = self.history_buffer[ped.id][-self.obs_len:]
+                obs_traj_list.append(np.array(history))
+                ped_ids.append(ped.id)
+
+            if len(obs_traj_list) == 0:
+                return predictions
+
+            # 转换为张量
+            obs_traj = np.array(obs_traj_list)
+            obs_traj = np.transpose(obs_traj, (1, 0, 2))
+            obs_traj_tensor = torch.FloatTensor(obs_traj).to(self.device)
+            seq_start_end = [(0, len(ped_ids))]
+
+            # Trajectron++多模态预测
+            with torch.no_grad():
+                pred_trajs, probs = self.model(obs_traj_tensor, seq_start_end)
+                pred_trajs = pred_trajs.cpu().numpy()  # (total_peds, num_modes, pred_len, 2)
+                probs = probs.cpu().numpy()  # (total_peds, num_modes)
+
+            # 整理结果
+            for i, ped_id in enumerate(ped_ids):
+                predictions[ped_id] = (pred_trajs[i], probs[i])
+
+        except Exception as e:
+            print(f"Multimodal prediction failed: {e}")
+            # 回退到单模态
+            single_preds = self.predict_all_trajectories(pedestrians, scene_bounds)
+            predictions = {
+                pid: (pred[np.newaxis, ...], np.array([1.0]))
+                for pid, pred in single_preds.items()
+            }
 
         return predictions
 
