@@ -406,6 +406,22 @@ class TrajectoryPredictor:
         # 历史轨迹缓冲区: {ped_id: [(x, y), ...]}
         self.history_buffer: Dict[int, List[np.ndarray]] = {}
 
+    def _normalize_device(self) -> str:
+        device = self.device
+        if device == "auto":
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "cpu"
+        if device == "mps" and not torch.backends.mps.is_available():
+            device = "cpu"
+        self.device = device
+        return device
+
     def _ensure_model_loaded(self) -> bool:
         """延迟加载模型 - 在首次需要时加载
 
@@ -475,8 +491,9 @@ class TrajectoryPredictor:
             from ml.trajectron import TrajectronPlusPlus
 
             # Load model
-            self.model = TrajectronPlusPlus.load(str(model_path), device='cpu')
-            self.device = 'cpu'
+            device = self._normalize_device()
+            self.model = TrajectronPlusPlus.load(str(model_path), device=device)
+            self.device = device
             self.model.eval()
 
             self.use_neural_network = True
@@ -507,7 +524,8 @@ class TrajectoryPredictor:
 
         try:
             # 使用CPU加载模型
-            checkpoint = torch.load(str(model_path), map_location='cpu', weights_only=False)
+            device = self._normalize_device()
+            checkpoint = torch.load(str(model_path), map_location=device, weights_only=False)
 
             # 创建模型实例
             self.model = SocialLSTM(
@@ -523,8 +541,8 @@ class TrajectoryPredictor:
 
             self.model.load_state_dict(checkpoint['model_state_dict'])
             # 强制使用CPU (避免Apple Silicon MPS问题)
-            self.model.to('cpu')
-            self.device = 'cpu'
+            self.model.to(device)
+            self.device = device
             self.model.eval()
 
             self.use_neural_network = True

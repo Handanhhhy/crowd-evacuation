@@ -20,13 +20,13 @@ import matplotlib.pyplot as plt
 import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from simulation.metro_evacuation_env import MetroEvacuationEnv
 
 
-def get_device():
-    """自动检测最佳训练设备
+def get_trajectory_device():
+    """自动检测轨迹预测的运行设备
 
     Returns:
         str: 'cuda' (NVIDIA GPU), 'mps' (Apple Silicon), 或 'cpu'
@@ -34,13 +34,13 @@ def get_device():
     if torch.cuda.is_available():
         device = "cuda"
         gpu_name = torch.cuda.get_device_name(0)
-        print(f"检测到 NVIDIA GPU: {gpu_name}")
+        print(f"轨迹预测使用 NVIDIA GPU: {gpu_name}")
     elif torch.backends.mps.is_available():
         device = "mps"
-        print("检测到 Apple Silicon GPU (MPS)")
+        print("轨迹预测使用 Apple Silicon GPU (MPS)")
     else:
         device = "cpu"
-        print("未检测到GPU，使用CPU训练")
+        print("轨迹预测使用 CPU")
     return device
 
 
@@ -66,7 +66,7 @@ class MetroTrainingCallback(BaseCallback):
         return True
 
 
-def train_ppo_metro():
+def train_ppo_metro(n_envs: int = 8, ppo_device: str = "cpu", trajectory_device: str = "auto"):
     """训练地铁站场景PPO模型"""
 
     print("=" * 60)
@@ -81,24 +81,46 @@ def train_ppo_metro():
 
     # 创建环境
     print("\n[1/4] 创建地铁站环境...")
-    env = MetroEvacuationEnv(
-        n_pedestrians=80,
-        scene_size=(60.0, 40.0),
-        max_steps=800,
-        dt=0.1
-    )
+    reward_weights = {
+        "evac_per_person": 12.0,
+        "congestion_penalty": 3.0,
+        "time_penalty": 0.2,
+        "completion_bonus": 200.0,
+        "balance_penalty": 0.8,
+    }
+
+    def make_env(rank: int, trajectory_device: str):
+        def _init():
+            env = MetroEvacuationEnv(
+                n_pedestrians=80,
+                scene_size=(60.0, 40.0),
+                max_steps=800,
+                dt=0.1,
+                reward_weights=reward_weights,
+                trajectory_device=trajectory_device,
+            )
+            env.reset(seed=rank)
+            return env
+
+        return _init
+
+    if trajectory_device == "auto":
+        trajectory_device = get_trajectory_device()
+    if ppo_device == "auto":
+        ppo_device = "cpu"
+    env = make_env(0, trajectory_device)()
 
     # 包装为向量环境
-    vec_env = DummyVecEnv([lambda: env])
-
-    # 检测训练设备
-    device = get_device()
+    if n_envs > 1:
+        vec_env = SubprocVecEnv([make_env(i, trajectory_device) for i in range(n_envs)])
+    else:
+        vec_env = DummyVecEnv([make_env(0, trajectory_device)])
 
     # 创建 PPO 模型
     print("\n[2/4] 创建 PPO 模型...")
     print("  - 观测空间: 8维 (3出口密度 + 3出口拥堵度 + 剩余比例 + 时间比例)")
     print("  - 动作空间: Discrete(3) (选择推荐出口A/B/C)")
-    print(f"  - 训练设备: {device.upper()}")
+    print(f"  - 训练设备: {ppo_device.upper()}")
 
     model = PPO(
         "MlpPolicy",
@@ -112,14 +134,14 @@ def train_ppo_metro():
         clip_range=0.2,
         ent_coef=0.01,       # 熵系数，鼓励探索
         verbose=1,
-        device=device        # 自动检测: cuda/mps/cpu
+        device=ppo_device    # PPO 使用 CPU 更高效 (MlpPolicy)
     )
 
     # 训练
-    print("\n[3/4] 开始训练 (50000步)...")
+    print("\n[3/4] 开始训练 (500000步)...")
     callback = MetroTrainingCallback()
 
-    total_timesteps = 50000
+    total_timesteps = 500000
     model.learn(
         total_timesteps=total_timesteps,
         callback=callback,
@@ -305,9 +327,21 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="训练地铁站场景PPO模型")
     parser.add_argument("--demo", action="store_true", help="演示训练好的模型")
+    parser.add_argument("--ppo-device", default="cpu",
+                        choices=["cpu", "cuda", "mps", "auto"],
+                        help="PPO 训练设备")
+    parser.add_argument("--trajectory-device", default="auto",
+                        choices=["cpu", "cuda", "mps", "auto"],
+                        help="轨迹预测设备")
+    parser.add_argument("--n-envs", type=int, default=8,
+                        help="并行环境数量")
     args = parser.parse_args()
 
     if args.demo:
         demo_trained_model()
     else:
-        train_ppo_metro()
+        train_ppo_metro(
+            n_envs=args.n_envs,
+            ppo_device=args.ppo_device,
+            trajectory_device=args.trajectory_device,
+        )

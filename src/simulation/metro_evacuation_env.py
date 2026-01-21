@@ -55,6 +55,14 @@ GUIDANCE_CONFIG = {
 }
 
 
+REWARD_DEFAULTS = {
+    "evac_per_person": 10.0,
+    "congestion_penalty": 2.0,
+    "time_penalty": 0.1,
+    "completion_bonus": 100.0,
+    "balance_penalty": 0.5,
+}
+
 @dataclass
 class Exit:
     """出口定义"""
@@ -99,6 +107,8 @@ class MetroEvacuationEnv(gym.Env):
         # 神经网络轨迹预测参数
         trajectory_model_path: Optional[str] = None,
         enable_neural_prediction: bool = True,
+        trajectory_device: Optional[str] = None,
+        reward_weights: Optional[Dict[str, float]] = None,
     ):
         """
         Args:
@@ -113,6 +123,7 @@ class MetroEvacuationEnv(gym.Env):
             gbm_model_path: GBM行为预测模型路径 (可选)
             trajectory_model_path: Social-LSTM轨迹预测模型路径 (可选)
             enable_neural_prediction: 是否启用神经网络轨迹预测
+            trajectory_device: 轨迹预测设备 ('auto'/'cpu'/'cuda'/'mps')
         """
         super().__init__()
 
@@ -143,8 +154,11 @@ class MetroEvacuationEnv(gym.Env):
         self.trajectory_predictor = None
         self.enable_neural_prediction = enable_neural_prediction
         self.trajectory_model_path = trajectory_model_path
+        self.trajectory_device = trajectory_device or "auto"
         if enable_neural_prediction and TRAJECTORY_PREDICTOR_AVAILABLE:
             self._load_trajectory_predictor(trajectory_model_path)
+
+        self.reward_weights = {**REWARD_DEFAULTS, **(reward_weights or {})}
 
         # 角落陷阱位置 (容易卡住的地方)
         self.corner_traps = [
@@ -255,7 +269,7 @@ class MetroEvacuationEnv(gym.Env):
                 model_path=model_path,
                 obs_len=8,
                 pred_len=12,
-                device='cpu'
+                device=self.trajectory_device
             )
             # 立即触发模型加载
             self.trajectory_predictor._ensure_model_loaded()
@@ -1179,27 +1193,28 @@ class MetroEvacuationEnv(gym.Env):
     def _compute_reward(self) -> float:
         """计算奖励"""
         reward = 0.0
+        w = self.reward_weights
 
         # 1. 疏散奖励：每疏散一人给正奖励
         new_evacuated = self.evacuated_count - (
             self.history['evacuated'][-2] if len(self.history['evacuated']) > 1 else 0
         )
-        reward += new_evacuated * 10.0
+        reward += new_evacuated * w["evac_per_person"]
 
         # 2. 拥堵惩罚
         total_congestion = 0
         for exit_obj in self.exits:
             _, congestion = self._compute_exit_metrics(exit_obj)
             total_congestion += congestion
-        reward -= total_congestion * 2.0
+        reward -= total_congestion * w["congestion_penalty"]
         self.history['congestion'].append(total_congestion)
 
         # 3. 时间惩罚（鼓励快速疏散）
-        reward -= 0.1
+        reward -= w["time_penalty"]
 
         # 4. 完成奖励
         if len(self.sfm.pedestrians) == 0:
-            reward += 100.0
+            reward += w["completion_bonus"]
 
         # 5. 均衡奖励：鼓励各出口分流
         counts = list(self.evacuated_by_exit.values())
@@ -1209,7 +1224,7 @@ class MetroEvacuationEnv(gym.Env):
             variance = sum((c - mean_count) ** 2 for c in counts) / 3
             # 归一化方差惩罚
             balance_penalty = min(variance / 100.0, 1.0)
-            reward -= balance_penalty * 0.5
+            reward -= balance_penalty * w["balance_penalty"]
 
         return reward
 

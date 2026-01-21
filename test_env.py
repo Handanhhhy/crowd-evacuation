@@ -40,8 +40,8 @@ def test_imports():
 
     print("-" * 40)
 
-    # 检查 PyTorch GPU
-    print("检查 PyTorch GPU 支持...")
+    # 检查 PyTorch cuda
+    print("检查 PyTorch cuda 支持...")
     try:
         import torch
         if torch.cuda.is_available():
@@ -49,7 +49,7 @@ def test_imports():
         elif torch.backends.mps.is_available():
             print(f"  [OK] MPS 可用 (Apple Silicon)")
         else:
-            print(f"  [!] 仅 CPU 模式（训练会较慢，但可以运行）")
+            print(f"  [!] 仅 cuda 模式（训练会较慢，但可以运行）")
     except Exception as e:
         print(f"  [X] 检查失败: {e}")
 
