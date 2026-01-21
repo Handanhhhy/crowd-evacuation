@@ -86,6 +86,11 @@ class Pedestrian:
     stuck_timer: float = 0.0  # 卡住计时器（用于反堵塞）
     last_position: np.ndarray = field(default_factory=lambda: np.zeros(2))  # 上一位置
 
+    # 引导状态 (分层预测式引导系统)
+    guidance_count: int = 0              # 已被引导次数
+    last_guidance_time: float = -999.0   # 上次引导时间
+    original_target: Optional[np.ndarray] = field(default=None)  # 原始目标（首次分配的）
+
     @property
     def speed(self) -> float:
         return np.linalg.norm(self.velocity)
@@ -136,7 +141,11 @@ class Pedestrian:
             wait_timer=0.0,
             panic_factor=0.0,
             stuck_timer=0.0,
-            last_position=position.copy()
+            last_position=position.copy(),
+            # 引导状态初始化
+            guidance_count=0,
+            last_guidance_time=-999.0,
+            original_target=target.copy()  # 保存原始目标
         )
 
 

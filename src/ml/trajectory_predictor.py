@@ -388,24 +388,55 @@ class TrajectoryPredictor:
         self.obs_len = obs_len
         self.pred_len = pred_len
         self.device = device
+        self.model = None
+        self.use_neural_network = False
+        self._model_path = model_path
+        self._model_loaded = False
 
         # 历史轨迹缓冲区: {ped_id: [(x, y), ...]}
         self.history_buffer: Dict[int, List[np.ndarray]] = {}
 
-        # 加载神经网络模型
-        self.model = None
-        if model_path and Path(model_path).exists():
+    def _ensure_model_loaded(self) -> bool:
+        """延迟加载模型 - 在首次需要时加载"""
+        if self._model_loaded:
+            return self.use_neural_network
+
+        self._model_loaded = True
+
+        if self._model_path and Path(self._model_path).exists():
             try:
-                self.model = SocialLSTM.load(model_path, device)
+                # 使用CPU加载模型
+                checkpoint = torch.load(self._model_path, map_location='cpu', weights_only=False)
+
+                # 创建模型实例
+                self.model = SocialLSTM(
+                    obs_len=checkpoint.get('obs_len', self.obs_len),
+                    pred_len=checkpoint.get('pred_len', self.pred_len),
+                    embedding_dim=checkpoint.get('embedding_dim', 64),
+                    hidden_dim=checkpoint.get('hidden_dim', 128),
+                    pool_dim=checkpoint.get('pool_dim', 64),
+                    grid_size=checkpoint.get('grid_size', 4),
+                    neighborhood_size=checkpoint.get('neighborhood_size', 2.0),
+                    dropout=0.0
+                )
+
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                # 强制使用CPU (避免Apple Silicon MPS问题)
+                self.model.to('cpu')
+                self.device = 'cpu'
+                self.model.eval()
+
                 self.use_neural_network = True
-                print("轨迹预测器: 使用Social-LSTM神经网络")
+                print(f"轨迹预测器: Social-LSTM已加载 (obs={self.model.obs_len}, pred={self.model.pred_len})")
+                return True
             except Exception as e:
                 print(f"加载Social-LSTM失败: {e}")
                 self.use_neural_network = False
                 print("轨迹预测器: 回退到线性外推")
+                return False
         else:
-            self.use_neural_network = False
             print("轨迹预测器: 使用线性外推 (未找到神经网络模型)")
+            return False
 
     def update_history(self, ped_id: int, position: np.ndarray):
         """更新行人历史轨迹
@@ -433,24 +464,73 @@ class TrajectoryPredictor:
         ped_id: int,
         current_pos: np.ndarray,
         current_vel: np.ndarray,
-        dt: float = 0.4
+        dt: float = 0.4,
+        target: np.ndarray = None,
+        obstacles: List[np.ndarray] = None
     ) -> np.ndarray:
-        """线性外推预测 (回退方案)
+        """增强版线性外推预测
+
+        考虑目标方向和障碍物的简单预测
 
         Args:
             ped_id: 行人ID
             current_pos: 当前位置
             current_vel: 当前速度
             dt: 时间步长
+            target: 目标位置 (可选)
+            obstacles: 障碍物列表 (可选)
 
         Returns:
             predicted_trajectory: (pred_len, 2) 预测轨迹
         """
         pred_traj = np.zeros((self.pred_len, 2))
         pos = current_pos.copy()
+        vel = current_vel.copy()
+
+        # 计算速度大小
+        speed = np.linalg.norm(vel)
+        if speed < 0.1:
+            speed = 1.2  # 默认行走速度
 
         for t in range(self.pred_len):
-            pos = pos + current_vel * dt
+            # 如果有目标，逐渐调整方向朝向目标
+            if target is not None:
+                direction_to_target = target - pos
+                dist_to_target = np.linalg.norm(direction_to_target)
+
+                if dist_to_target > 0.5:
+                    # 目标方向
+                    target_dir = direction_to_target / dist_to_target
+
+                    # 当前方向
+                    if np.linalg.norm(vel) > 0.1:
+                        current_dir = vel / np.linalg.norm(vel)
+                    else:
+                        current_dir = target_dir
+
+                    # 混合方向 (逐渐转向目标)
+                    blend_factor = 0.3  # 每步转向30%
+                    new_dir = (1 - blend_factor) * current_dir + blend_factor * target_dir
+                    new_dir = new_dir / (np.linalg.norm(new_dir) + 1e-6)
+
+                    vel = new_dir * speed
+
+            # 更新位置
+            new_pos = pos + vel * dt
+
+            # 简单障碍物避免 (如果提供了障碍物)
+            if obstacles is not None:
+                for obs in obstacles:
+                    obs_pos = np.array(obs)
+                    dist_to_obs = np.linalg.norm(new_pos - obs_pos)
+                    if dist_to_obs < 2.0:  # 障碍物影响范围
+                        # 推开
+                        if dist_to_obs > 0.1:
+                            push_dir = (new_pos - obs_pos) / dist_to_obs
+                            push_strength = (2.0 - dist_to_obs) * 0.5
+                            new_pos = new_pos + push_dir * push_strength
+
+            pos = new_pos
             pred_traj[t] = pos
 
         return pred_traj
@@ -477,6 +557,9 @@ class TrajectoryPredictor:
         # 更新历史缓冲区
         for ped in pedestrians:
             self.update_history(ped.id, ped.position)
+
+        # 延迟加载模型
+        self._ensure_model_loaded()
 
         # 如果有神经网络且历史足够，使用神经网络预测
         if self.use_neural_network and self._has_enough_history(pedestrians):

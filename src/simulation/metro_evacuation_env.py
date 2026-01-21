@@ -36,6 +36,25 @@ except ImportError:
     print("警告: 轨迹预测器不可用，使用线性外推")
 
 
+# ========== 分层预测式引导系统配置 ==========
+GUIDANCE_CONFIG = {
+    'max_guidance_count': 2,           # 每人最多被引导2次
+    'cooldown_time': 6.0,              # 冷却时间6秒
+    'min_distance_to_target': 6.0,     # 距目标>6米才可引导
+    'guidance_zone_x': 20.0,           # x>20进入引导区
+    'problem_prediction_horizon': 12,  # 预测12步(4.8秒)
+    'congestion_threshold': 0.35,      # 拥堵度阈值
+    'corner_trap_radius': 3.5,         # 角落陷阱检测半径
+    # 主动分流参数
+    'exit_imbalance_threshold': 0.40,  # 出口负载不均阈值（>40%则分流）
+    'min_peds_for_rebalance': 8,       # 至少8人时才考虑分流
+    'rebalance_distance_threshold': 10.0,  # 距出口>10米才分流
+    # 引导收益判断（重要：考虑拥堵收益）
+    'min_distance_benefit': 0.0,       # 不要求距离更近（允许为了避堵走远路）
+    'min_congestion_benefit': 0.1,     # 拥堵度差异>0.1就值得改道
+}
+
+
 @dataclass
 class Exit:
     """出口定义"""
@@ -177,6 +196,9 @@ class MetroEvacuationEnv(gym.Env):
         self.evacuated_by_exit = {'A': 0, 'B': 0, 'C': 0}
         self.evacuated_by_type = {t: 0 for t in PedestrianType}  # 按类型统计
 
+        # 分层预测式引导系统状态
+        self.last_action = 0  # 上一次PPO动作（推荐出口）
+
         # 记录
         self.history = {
             'evacuated': [],
@@ -208,7 +230,7 @@ class MetroEvacuationEnv(gym.Env):
         """加载Social-LSTM轨迹预测模型
 
         Args:
-            model_path: 模型文件路径 (None则使用线性外推)
+            model_path: 模型文件路径 (None则自动查找默认路径)
 
         Returns:
             是否加载成功
@@ -217,17 +239,28 @@ class MetroEvacuationEnv(gym.Env):
             print("轨迹预测器模块不可用")
             return False
 
-        # 注意：不自动加载神经网络模型，使用线性外推作为默认
-        # 这避免了某些系统上的PyTorch兼容性问题
-        # 如果需要神经网络预测，请显式传入model_path
+        # 如果没有指定路径，自动查找默认模型路径
+        if model_path is None:
+            default_paths = [
+                Path(__file__).parent.parent.parent / "outputs" / "models" / "social_lstm.pt",
+                Path("outputs/models/social_lstm.pt"),
+            ]
+            for p in default_paths:
+                if p.exists():
+                    model_path = str(p.absolute())
+                    break
+
         try:
             self.trajectory_predictor = TrajectoryPredictor(
-                model_path=model_path,  # 保持为None以使用线性外推
+                model_path=model_path,
                 obs_len=8,
                 pred_len=12,
                 device='cpu'
             )
-            print(f"轨迹预测器已加载 (模式: {'神经网络' if self.trajectory_predictor.use_neural_network else '线性外推'})")
+            # 立即触发模型加载
+            self.trajectory_predictor._ensure_model_loaded()
+            mode = '神经网络' if self.trajectory_predictor.use_neural_network else '线性外推'
+            print(f"轨迹预测器已加载 (模式: {mode})")
             return True
         except Exception as e:
             print(f"轨迹预测器加载失败: {e}")
@@ -369,6 +402,7 @@ class MetroEvacuationEnv(gym.Env):
         self.evacuated_count = 0
         self.evacuated_by_exit = {'A': 0, 'B': 0, 'C': 0}
         self.evacuated_by_type = {t: 0 for t in PedestrianType}
+        self.last_action = 0  # 重置引导系统状态
 
         self.history = {
             'evacuated': [],
@@ -736,6 +770,299 @@ class MetroEvacuationEnv(gym.Env):
 
         return redirect_count
 
+    # ========== 分层预测式引导系统 ==========
+
+    def predictive_guidance_system(self) -> int:
+        """分层预测式引导系统 - 替代原有的随机概率引导
+
+        第1层：PPO全局决策 - 获取推荐出口
+        第2层：Social-LSTM预测筛选 - 识别将遇到问题的行人
+        第3层：个体决策 - 检查引导条件后引导
+
+        Returns:
+            本次引导的行人数量
+        """
+        if self.trajectory_predictor is None:
+            return 0
+
+        guided_count = 0
+        current_time = self.current_step * self.dt
+
+        # 第1层：PPO推荐的出口（由step()传入的last_action决定）
+        recommended_exit = self.exits[self.last_action]
+
+        # 第2层：预测所有人轨迹，识别问题行人
+        predictions = self.predict_future_positions_neural()
+        problem_pedestrians = self._identify_problem_pedestrians(predictions)
+
+        # 第3层：对问题行人进行个体引导决策
+        for ped in problem_pedestrians:
+            if self._can_be_guided(ped, current_time):
+                best_exit = self._find_best_alternative_exit(ped, recommended_exit)
+                if best_exit is not None:
+                    self._apply_guidance(ped, best_exit, current_time)
+                    guided_count += 1
+
+        return guided_count
+
+    def _identify_problem_pedestrians(
+        self,
+        predictions: Dict[int, np.ndarray]
+    ) -> List[Pedestrian]:
+        """识别将遇到问题的行人（主动预防式）
+
+        问题类型（优先级从高到低）：
+        1. 走向角落陷阱
+        2. 走向已拥堵的出口（实时拥堵）
+        3. 走向负载过高的出口（负载不均衡）
+
+        关键：只从过载出口分流行人，不会把人分流到过载出口
+
+        Args:
+            predictions: 神经网络预测的轨迹 {ped_id: (12, 2)}
+
+        Returns:
+            问题行人列表
+        """
+        problem_peds = []
+        cfg = GUIDANCE_CONFIG
+
+        # 第一步：统计每个出口的目标人数
+        exit_target_count = {exit_obj.id: 0 for exit_obj in self.exits}
+
+        for ped in self.sfm.pedestrians:
+            for exit_obj in self.exits:
+                if np.linalg.norm(ped.target - exit_obj.position) < 2.0:
+                    exit_target_count[exit_obj.id] += 1
+                    break
+
+        # 计算总人数
+        total_peds = len(self.sfm.pedestrians)
+        if total_peds < cfg['min_peds_for_rebalance']:
+            return problem_peds
+
+        # 第二步：找出过载的出口（目标人数占比>阈值）
+        avg_per_exit = total_peds / len(self.exits)
+        overloaded_exit_ids = set()
+
+        for exit_obj in self.exits:
+            count = exit_target_count[exit_obj.id]
+            ratio = count / total_peds if total_peds > 0 else 0
+
+            # 过载条件：占比超过阈值 且 人数明显高于平均
+            if ratio > cfg['exit_imbalance_threshold'] and count > avg_per_exit * 1.2:
+                overloaded_exit_ids.add(exit_obj.id)
+
+        # 第三步：识别问题行人（只从过载出口选择）
+        for ped in self.sfm.pedestrians:
+            if ped.id not in predictions:
+                continue
+
+            pred_traj = predictions[ped.id]
+
+            # 检查1：走向角落陷阱
+            is_trapped, _ = self.detect_corner_trap(ped.id, pred_traj)
+            if is_trapped:
+                problem_peds.append(ped)
+                continue
+
+            # 检查2：走向已拥堵的出口（实时拥堵度）
+            if self._will_reach_congested_exit(ped, pred_traj):
+                problem_peds.append(ped)
+                continue
+
+            # 检查3：走向过载出口的行人（负载分流）
+            # 关键：只有目标是过载出口的行人才会被选中分流
+            for exit_obj in self.exits:
+                if exit_obj.id in overloaded_exit_ids:
+                    if np.linalg.norm(ped.target - exit_obj.position) < 2.0:
+                        # 该行人正走向过载出口
+                        dist_to_exit = np.linalg.norm(ped.position - exit_obj.position)
+                        rebalance_dist = cfg.get('rebalance_distance_threshold', 10.0)
+                        # 只分流距离出口较远的行人（有调整空间）
+                        if dist_to_exit > rebalance_dist:
+                            problem_peds.append(ped)
+                        break
+
+        return problem_peds
+
+    def _will_reach_congested_exit(
+        self,
+        ped: Pedestrian,
+        pred_traj: np.ndarray
+    ) -> bool:
+        """检查行人是否正在走向拥堵出口
+
+        Args:
+            ped: 行人对象
+            pred_traj: 预测轨迹
+
+        Returns:
+            是否将到达拥堵出口
+        """
+        cfg = GUIDANCE_CONFIG
+
+        # 找到行人当前目标对应的出口
+        target_exit = None
+        min_dist = float('inf')
+        for exit_obj in self.exits:
+            dist = np.linalg.norm(ped.target - exit_obj.position)
+            if dist < min_dist:
+                min_dist = dist
+                target_exit = exit_obj
+
+        if target_exit is None:
+            return False
+
+        # 计算该出口的拥堵度
+        _, congestion = self._compute_exit_metrics(target_exit)
+
+        # 如果拥堵度超过阈值，判定为问题
+        return congestion > cfg['congestion_threshold']
+
+    def _can_be_guided(self, ped: Pedestrian, current_time: float) -> bool:
+        """检查行人是否可以被引导
+
+        条件：
+        1. 在引导区域内（已过闸机）
+        2. 引导次数未超限
+        3. 冷却时间已过
+        4. 距离目标足够远
+
+        Args:
+            ped: 行人对象
+            current_time: 当前仿真时间
+
+        Returns:
+            是否可以被引导
+        """
+        cfg = GUIDANCE_CONFIG
+
+        # 条件1：在引导区域内（x > guidance_zone_x，即已过闸机）
+        if ped.position[0] <= cfg['guidance_zone_x']:
+            return False
+
+        # 条件2：引导次数未超限
+        if ped.guidance_count >= cfg['max_guidance_count']:
+            return False
+
+        # 条件3：冷却时间已过
+        if current_time - ped.last_guidance_time < cfg['cooldown_time']:
+            return False
+
+        # 条件4：距离目标足够远（有改道空间）
+        dist_to_target = np.linalg.norm(ped.position - ped.target)
+        if dist_to_target < cfg['min_distance_to_target']:
+            return False
+
+        return True
+
+    def _find_best_alternative_exit(
+        self,
+        ped: Pedestrian,
+        recommended_exit: 'Exit'
+    ) -> Optional['Exit']:
+        """为问题行人找到最佳替代出口
+
+        核心原则：
+        1. 不引导到过载出口（目标人数过多的出口）
+        2. 优先引导到人少且近的出口
+        3. 只有明显更优时才改道
+
+        Args:
+            ped: 行人对象
+            recommended_exit: PPO推荐的出口
+
+        Returns:
+            最佳替代出口，如果没有则返回None
+        """
+        cfg = GUIDANCE_CONFIG
+
+        # 当前目标出口
+        current_target_exit = None
+        current_dist = float('inf')
+        for exit_obj in self.exits:
+            if np.linalg.norm(ped.target - exit_obj.position) < 1.0:
+                current_target_exit = exit_obj
+                current_dist = np.linalg.norm(ped.position - exit_obj.position)
+                break
+
+        if current_target_exit is None:
+            return None
+
+        # 统计各出口目标人数，确定过载出口
+        total_peds = len(self.sfm.pedestrians)
+        exit_target_count = {exit_obj.id: 0 for exit_obj in self.exits}
+        for p in self.sfm.pedestrians:
+            for exit_obj in self.exits:
+                if np.linalg.norm(p.target - exit_obj.position) < 2.0:
+                    exit_target_count[exit_obj.id] += 1
+                    break
+
+        # 计算当前出口的拥堵度
+        _, current_congestion = self._compute_exit_metrics(current_target_exit)
+        current_count = exit_target_count[current_target_exit.id]
+
+        # 寻找最佳替代出口
+        best_exit = None
+        best_score = float('-inf')
+
+        for exit_obj in self.exits:
+            if exit_obj.id == current_target_exit.id:
+                continue
+
+            # 关键检查：不引导到人更多的出口
+            target_count = exit_target_count[exit_obj.id]
+            if target_count >= current_count:
+                continue  # 新出口人不比当前少，不考虑
+
+            _, congestion = self._compute_exit_metrics(exit_obj)
+            dist_to_exit = np.linalg.norm(ped.position - exit_obj.position)
+
+            # 评分：人数差距 + 距离因素
+            # 人数差距更重要（权重更高）
+            count_benefit = (current_count - target_count) * 5  # 每少1人 = +5分
+            distance_cost = (dist_to_exit - current_dist) * 0.5  # 每远1米 = -0.5分
+            congestion_benefit = (current_congestion - congestion) * 10
+
+            score = count_benefit + congestion_benefit - distance_cost
+
+            # 只有分数为正（确实更好）才考虑
+            if score > 0 and score > best_score:
+                best_score = score
+                best_exit = exit_obj
+
+        return best_exit
+
+    def _apply_guidance(
+        self,
+        ped: Pedestrian,
+        new_exit: 'Exit',
+        current_time: float
+    ) -> None:
+        """应用引导并更新行人状态
+
+        Args:
+            ped: 行人对象
+            new_exit: 新目标出口
+            current_time: 当前仿真时间
+        """
+        # 记录原始目标（首次引导时）
+        if ped.original_target is None:
+            ped.original_target = ped.target.copy()
+
+        old_target = ped.target.copy()
+
+        # 更新目标
+        ped.target = new_exit.position.copy()
+
+        # 更新引导状态
+        ped.guidance_count += 1
+        ped.last_guidance_time = current_time
+
+        # 调试日志（可选）
+        # print(f"引导行人 {ped.id}: 第{ped.guidance_count}次, 目标变更为出口{new_exit.name}")
+
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """执行一步
 
@@ -745,25 +1072,27 @@ class MetroEvacuationEnv(gym.Env):
         Returns:
             observation, reward, terminated, truncated, info
         """
-        # 预测性疏通系统：
-        # 1. 每5步执行一次预测重分配
-        # 2. 使用神经网络预测时，额外执行角落避免
-        redirected = 0
+        # 保存PPO决策，供分层引导系统使用
+        self.last_action = action
+
+        # ========== 分层预测式引导系统 ==========
+        # 替代原有的随机概率引导(_apply_action)
+        # 特点：定向引导、一次决策、有冷却期、基于预测
+        guided_count = 0
         corner_avoided = 0
 
         if self.current_step % 5 == 0 and len(self.sfm.pedestrians) > 5:
-            # 出口负载均衡
-            redirected = self.rebalance_exit_assignments(
-                threshold=8,    # 降低阈值，更积极地分流
-                t_horizon=3.0   # 预测3秒后的状态
-            )
-
-            # 主动角落避免 (神经网络增强)
+            # 使用分层预测式引导系统
             if self.trajectory_predictor is not None:
+                guided_count = self.predictive_guidance_system()
+                # 主动角落避免（作为补充）
                 corner_avoided = self.proactive_corner_avoidance()
-
-        # 根据动作调整部分行人的目标出口
-        self._apply_action(action)
+            else:
+                # 回退到旧版负载均衡（无神经网络预测时）
+                guided_count = self.rebalance_exit_assignments(
+                    threshold=8,
+                    t_horizon=3.0
+                )
 
         # 运行社会力模型多步
         for _ in range(5):
@@ -790,7 +1119,7 @@ class MetroEvacuationEnv(gym.Env):
             'evacuated_by_exit': self.evacuated_by_exit.copy(),
             'evacuated_by_type': {t.value: c for t, c in self.evacuated_by_type.items()},
             'enhanced_behaviors': self.enable_enhanced_behaviors,
-            'redirected_this_step': redirected,  # 本步重定向的行人数
+            'guided_this_step': guided_count,  # 本步引导的行人数（分层预测式引导）
             'corner_avoided_this_step': corner_avoided,  # 本步角落避免的行人数
             'neural_prediction': self.trajectory_predictor is not None,  # 是否使用神经网络预测
         }
