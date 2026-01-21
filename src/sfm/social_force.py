@@ -1,47 +1,178 @@
 """
 社会力模型实现
 基于 Helbing 的社会力模型，结合 pysocialforce 库
+
+文献参考:
+- Helbing, D., & Molnar, P. (1995). Social force model for pedestrian dynamics.
+- Weidmann, U. (1993). Transporttechnik der Fußgänger.
+- Fruin, J. J. (1971). Pedestrian planning and design.
+- Hall, E. T. (1966). The Hidden Dimension.
 """
 
 import numpy as np
 from typing import List, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class PedestrianType(Enum):
+    """行人类型枚举
+
+    基于文献的行人类型分类:
+    - NORMAL: 普通成年人 (Helbing 1995)
+    - ELDERLY: 老年人 (Weidmann 1993)
+    - CHILD: 儿童 (Fruin 1971)
+    - IMPATIENT: 急躁型 (参考 Helbing)
+    """
+    NORMAL = "normal"      # 普通成年人
+    ELDERLY = "elderly"    # 老人
+    CHILD = "child"        # 儿童
+    IMPATIENT = "impatient" # 急躁型
+
+
+# 行人类型参数配置 (基于文献)
+# 参考: Helbing 1995, Weidmann 1993, Fruin 1971
+PEDESTRIAN_TYPE_PARAMS = {
+    PedestrianType.NORMAL: {
+        'desired_speed': 1.34,      # Helbing 1995: 1.34 m/s
+        'speed_std': 0.26,          # Helbing 1995: σ = 0.26
+        'reaction_time': 0.5,       # Helbing 2000: τ = 0.5s
+        'radius': 0.3,
+        'color': 'blue',            # 可视化颜色
+    },
+    PedestrianType.ELDERLY: {
+        'desired_speed': 0.9,       # Weidmann 1993: 0.8-1.0 m/s
+        'speed_std': 0.15,
+        'reaction_time': 0.8,       # 反应时间较长
+        'radius': 0.3,
+        'color': 'green',
+    },
+    PedestrianType.CHILD: {
+        'desired_speed': 0.7,       # Fruin 1971: 0.6-0.8 m/s
+        'speed_std': 0.2,
+        'reaction_time': 0.6,
+        'radius': 0.25,             # 儿童体型较小
+        'color': 'yellow',
+    },
+    PedestrianType.IMPATIENT: {
+        'desired_speed': 1.6,       # 参考 Helbing, 较高速度
+        'speed_std': 0.2,
+        'reaction_time': 0.3,       # 反应更快
+        'radius': 0.3,
+        'color': 'red',
+    },
+}
 
 
 @dataclass
 class Pedestrian:
-    """行人状态"""
+    """行人状态
+
+    扩展版本，支持行人类型和增强行为特征
+    """
     id: int
     position: np.ndarray      # [x, y]
     velocity: np.ndarray      # [vx, vy]
     target: np.ndarray        # 目标位置 [x, y]
     desired_speed: float = 1.34  # 期望速度 m/s
     radius: float = 0.3       # 行人半径 m
+    ped_type: PedestrianType = PedestrianType.NORMAL  # 行人类型
+    reaction_time: float = 0.5  # 反应时间 (tau)
+
+    # 行为状态
+    is_waiting: bool = False  # 是否在等待
+    wait_timer: float = 0.0   # 等待计时器
+    panic_factor: float = 0.0  # 恐慌因子 (0-1)
 
     @property
     def speed(self) -> float:
         return np.linalg.norm(self.velocity)
 
+    @classmethod
+    def create_with_type(
+        cls,
+        id: int,
+        position: np.ndarray,
+        velocity: np.ndarray,
+        target: np.ndarray,
+        ped_type: PedestrianType = PedestrianType.NORMAL,
+        speed_variation: bool = True
+    ) -> 'Pedestrian':
+        """根据类型创建行人，自动应用文献参数
+
+        Args:
+            id: 行人ID
+            position: 初始位置
+            velocity: 初始速度
+            target: 目标位置
+            ped_type: 行人类型
+            speed_variation: 是否添加速度随机变化
+        """
+        params = PEDESTRIAN_TYPE_PARAMS[ped_type]
+
+        # 期望速度 (添加随机变化)
+        if speed_variation:
+            desired_speed = np.random.normal(
+                params['desired_speed'],
+                params['speed_std']
+            )
+            # 确保速度在合理范围内
+            desired_speed = np.clip(desired_speed, 0.3, 2.0)
+        else:
+            desired_speed = params['desired_speed']
+
+        return cls(
+            id=id,
+            position=position,
+            velocity=velocity,
+            target=target,
+            desired_speed=desired_speed,
+            radius=params['radius'],
+            ped_type=ped_type,
+            reaction_time=params['reaction_time'],
+            is_waiting=False,
+            wait_timer=0.0,
+            panic_factor=0.0
+        )
+
 
 class SocialForceModel:
-    """社会力模型
+    """增强版社会力模型
 
-    F_total = F_drive + F_social + F_obstacle
+    F_total = F_drive + F_social + F_obstacle + F_random
 
     - F_drive: 驱动力，驱使行人向目标移动
     - F_social: 社会力，行人之间的排斥力
     - F_obstacle: 障碍物排斥力
+    - F_random: 随机扰动力（模拟犹豫行为）
+
+    增强特性:
+    - 行人类型差异化（老人、儿童、急躁型）
+    - 等待/排队行为
+    - 随机扰动（犹豫行为）
+    - 恐慌反应
+
+    文献参考:
+    - Helbing, D., & Molnar, P. (1995). Social force model for pedestrian dynamics.
+    - Helbing, D., Farkas, I., & Vicsek, T. (2000). Simulating dynamical features of escape panic.
     """
 
     def __init__(
         self,
-        tau: float = 0.5,          # 松弛时间
+        tau: float = 0.5,          # 松弛时间 (默认值，实际使用行人类型参数)
         A: float = 2000.0,         # 社会力强度
         B: float = 0.08,           # 社会力范围
         k: float = 1.2e5,          # 身体力常数
         kappa: float = 2.4e5,      # 摩擦力常数
         wall_A: float = 2000.0,    # 墙壁排斥力强度
         wall_B: float = 0.08,      # 墙壁排斥力范围
+        # 增强行为参数
+        enable_waiting: bool = True,      # 启用等待行为
+        waiting_density_threshold: float = 0.8,  # 触发等待的密度阈值
+        enable_perturbation: bool = True,  # 启用随机扰动
+        perturbation_sigma: float = 0.1,   # 随机扰动标准差 (m/s)
+        enable_panic: bool = True,         # 启用恐慌反应
+        panic_density_threshold: float = 1.5,  # 触发恐慌的密度阈值
     ):
         self.tau = tau
         self.A = A
@@ -50,6 +181,14 @@ class SocialForceModel:
         self.kappa = kappa
         self.wall_A = wall_A
         self.wall_B = wall_B
+
+        # 增强行为参数
+        self.enable_waiting = enable_waiting
+        self.waiting_density_threshold = waiting_density_threshold
+        self.enable_perturbation = enable_perturbation
+        self.perturbation_sigma = perturbation_sigma
+        self.enable_panic = enable_panic
+        self.panic_density_threshold = panic_density_threshold
 
         self.pedestrians: List[Pedestrian] = []
         self.obstacles: List[np.ndarray] = []  # 障碍物线段列表
@@ -66,7 +205,17 @@ class SocialForceModel:
         """计算驱动力 F_drive = (v0 * e - v) / tau
 
         驱使行人以期望速度向目标方向移动
+
+        增强特性:
+        - 使用行人类型特定的反应时间 (tau)
+        - 支持等待行为 (速度降为0)
+        - 支持恐慌因子 (速度增加)
         """
+        # 如果行人在等待，驱动力为减速力
+        if ped.is_waiting:
+            # 驱使行人停下来
+            return -ped.velocity / ped.reaction_time
+
         direction = ped.target - ped.position
         distance = np.linalg.norm(direction)
 
@@ -74,9 +223,20 @@ class SocialForceModel:
             return np.zeros(2)
 
         e = direction / distance  # 单位方向向量
-        desired_velocity = ped.desired_speed * e
 
-        return (desired_velocity - ped.velocity) / self.tau
+        # 计算有效期望速度 (考虑恐慌因子)
+        # 恐慌时速度增加: v = v0 × (1 + panic_factor)
+        effective_speed = ped.desired_speed * (1.0 + ped.panic_factor)
+
+        # 限制最大速度 (即使恐慌也不能超过2.5 m/s)
+        effective_speed = min(effective_speed, 2.5)
+
+        desired_velocity = effective_speed * e
+
+        # 使用行人类型特定的反应时间
+        tau = ped.reaction_time
+
+        return (desired_velocity - ped.velocity) / tau
 
     def compute_social_force(self, ped: Pedestrian) -> np.ndarray:
         """计算社会力（行人之间的排斥力）
@@ -158,31 +318,179 @@ class SocialForceModel:
         t = max(0, min(1, np.dot(point - start, segment) / length_sq))
         return start + t * segment
 
+    def compute_local_density(self, ped: Pedestrian, radius: float = 2.0) -> float:
+        """计算行人周围的局部密度
+
+        Args:
+            ped: 当前行人
+            radius: 检测半径 (默认2米，符合 Hall 1966 社会距离)
+
+        Returns:
+            密度值 (人/平方米)
+        """
+        count = 0
+        for other in self.pedestrians:
+            if other.id == ped.id:
+                continue
+            distance = np.linalg.norm(ped.position - other.position)
+            if distance < radius:
+                count += 1
+
+        # 密度 = 人数 / 面积
+        area = np.pi * radius ** 2
+        return count / area
+
+    def compute_random_perturbation(self, ped: Pedestrian) -> np.ndarray:
+        """计算随机扰动力（模拟犹豫/闲逛行为）
+
+        基于高斯噪声，σ = 0.1 m/s (可配置)
+        参考: Helbing 2000 - 行人行为的随机性
+        """
+        if not self.enable_perturbation:
+            return np.zeros(2)
+
+        # 高斯随机扰动
+        perturbation = np.random.normal(0, self.perturbation_sigma, 2)
+
+        return perturbation
+
+    def update_waiting_state(self, ped: Pedestrian, dt: float) -> None:
+        """更新行人的等待状态
+
+        当前方密度超过阈值时，行人进入等待状态
+
+        Args:
+            ped: 行人对象
+            dt: 时间步长
+        """
+        if not self.enable_waiting:
+            ped.is_waiting = False
+            return
+
+        # 计算行进方向前方的密度
+        direction = ped.target - ped.position
+        dist = np.linalg.norm(direction)
+        if dist < 0.1:
+            ped.is_waiting = False
+            return
+
+        e = direction / dist
+
+        # 检测前方扇形区域内的行人数量
+        front_count = 0
+        for other in self.pedestrians:
+            if other.id == ped.id:
+                continue
+            diff = other.position - ped.position
+            distance = np.linalg.norm(diff)
+
+            # 只检测前方3米范围内
+            if distance < 3.0 and distance > 0.1:
+                # 检查是否在前方 (夹角小于60度)
+                cos_angle = np.dot(diff, e) / distance
+                if cos_angle > 0.5:  # cos(60°) = 0.5
+                    front_count += 1
+
+        # 计算前方密度
+        front_density = front_count / (np.pi * 3.0 ** 2 / 2)  # 半圆面积
+
+        # 判断是否需要等待
+        if front_density > self.waiting_density_threshold:
+            ped.is_waiting = True
+            ped.wait_timer += dt
+        else:
+            ped.is_waiting = False
+            ped.wait_timer = 0.0
+
+        # 等待时间过长自动恢复 (最多等待5秒)
+        if ped.wait_timer > 5.0:
+            ped.is_waiting = False
+            ped.wait_timer = 0.0
+
+    def update_panic_factor(self, ped: Pedestrian) -> None:
+        """更新行人的恐慌因子
+
+        当周围密度过高时，恐慌因子增加
+        恐慌因子影响期望速度: v = v0 × (1 + panic_factor)
+
+        参考: Helbing 2000 - Escape panic dynamics
+        """
+        if not self.enable_panic:
+            ped.panic_factor = 0.0
+            return
+
+        # 计算局部密度
+        density = self.compute_local_density(ped, radius=2.0)
+
+        # 恐慌因子与密度相关
+        if density > self.panic_density_threshold:
+            # 线性增加恐慌因子，最大0.5
+            ped.panic_factor = min(
+                (density - self.panic_density_threshold) * 0.3,
+                0.5
+            )
+        else:
+            # 逐渐恢复平静
+            ped.panic_factor = max(0, ped.panic_factor - 0.02)
+
     def compute_total_force(self, ped: Pedestrian) -> np.ndarray:
-        """计算总力"""
+        """计算总力
+
+        F_total = F_drive + F_social + F_obstacle + F_random
+        """
         f_drive = self.compute_driving_force(ped)
         f_social = self.compute_social_force(ped)
         f_obstacle = self.compute_obstacle_force(ped)
+        f_random = self.compute_random_perturbation(ped)
 
-        return f_drive + f_social + f_obstacle
+        return f_drive + f_social + f_obstacle + f_random
 
     def step(self, dt: float = 0.1) -> None:
-        """更新所有行人状态（一个时间步）"""
-        # 计算所有行人的力
+        """Update all pedestrian states (one time step)
+
+        Enhanced version:
+        1. Update behavior states (waiting, panic)
+        2. Compute social forces
+        3. Update velocity and position
+        4. Anti-stuck mechanism
+        """
+        # 1. Update behavior states
+        for ped in self.pedestrians:
+            self.update_waiting_state(ped, dt)
+            self.update_panic_factor(ped)
+
+        # 2. Compute forces for all pedestrians
         forces = [self.compute_total_force(ped) for ped in self.pedestrians]
 
-        # 更新速度和位置
+        # 3. Update velocity and position
         for ped, force in zip(self.pedestrians, forces):
-            # 更新速度 (F = ma, 假设质量为1)
+            # Update velocity (F = ma, assuming mass = 1)
             ped.velocity = ped.velocity + force * dt
 
-            # 限制最大速度
+            # Anti-stuck mechanism: if speed is very low and not waiting,
+            # add a random push to escape local minima
             speed = np.linalg.norm(ped.velocity)
-            max_speed = ped.desired_speed * 1.5
+            if speed < 0.1 and not ped.is_waiting:
+                # Check distance to target
+                dist_to_target = np.linalg.norm(ped.target - ped.position)
+                if dist_to_target > 1.0:  # Still far from target but stuck
+                    # Add random perpendicular push
+                    direction = ped.target - ped.position
+                    if np.linalg.norm(direction) > 0.1:
+                        direction = direction / np.linalg.norm(direction)
+                        # Perpendicular direction
+                        perp = np.array([-direction[1], direction[0]])
+                        # Random push left or right
+                        push = perp * np.random.choice([-1, 1]) * 0.5
+                        ped.velocity = ped.velocity + push
+
+            # Limit max speed (considering panic factor)
+            speed = np.linalg.norm(ped.velocity)
+            max_speed = ped.desired_speed * (1.5 + ped.panic_factor * 0.3)
             if speed > max_speed:
                 ped.velocity = ped.velocity / speed * max_speed
 
-            # 更新位置
+            # Update position
             ped.position = ped.position + ped.velocity * dt
 
     def get_state(self) -> np.ndarray:
@@ -215,7 +523,8 @@ def create_random_pedestrians(
     n: int,
     spawn_area: Tuple[float, float, float, float],
     target: np.ndarray,
-    seed: int = None
+    seed: int = None,
+    type_distribution: Optional[dict] = None
 ) -> List[Pedestrian]:
     """创建随机分布的行人
 
@@ -224,9 +533,32 @@ def create_random_pedestrians(
         spawn_area: 生成区域 (x_min, y_min, x_max, y_max)
         target: 目标位置
         seed: 随机种子
+        type_distribution: 行人类型分布比例，例如:
+            {
+                PedestrianType.NORMAL: 0.70,
+                PedestrianType.ELDERLY: 0.15,
+                PedestrianType.CHILD: 0.10,
+                PedestrianType.IMPATIENT: 0.05
+            }
     """
     if seed is not None:
         np.random.seed(seed)
+
+    # 默认类型分布 (基于一般人群构成)
+    if type_distribution is None:
+        type_distribution = {
+            PedestrianType.NORMAL: 0.70,
+            PedestrianType.ELDERLY: 0.15,
+            PedestrianType.CHILD: 0.10,
+            PedestrianType.IMPATIENT: 0.05,
+        }
+
+    # 根据分布生成类型列表
+    types = list(type_distribution.keys())
+    probs = list(type_distribution.values())
+    # 归一化概率
+    total = sum(probs)
+    probs = [p / total for p in probs]
 
     pedestrians = []
     x_min, y_min, x_max, y_max = spawn_area
@@ -238,13 +570,42 @@ def create_random_pedestrians(
         ])
         velocity = np.zeros(2)
 
-        ped = Pedestrian(
+        # 随机选择行人类型
+        ped_type = np.random.choice(types, p=probs)
+
+        # 使用工厂方法创建带类型的行人
+        ped = Pedestrian.create_with_type(
             id=i,
             position=position,
             velocity=velocity,
             target=target.copy(),
-            desired_speed=np.random.uniform(1.0, 1.5)  # 速度略有差异
+            ped_type=ped_type,
+            speed_variation=True
         )
         pedestrians.append(ped)
 
     return pedestrians
+
+
+def create_pedestrian_with_type(
+    id: int,
+    position: np.ndarray,
+    target: np.ndarray,
+    ped_type: PedestrianType = PedestrianType.NORMAL
+) -> Pedestrian:
+    """便捷函数：创建指定类型的单个行人
+
+    Args:
+        id: 行人ID
+        position: 初始位置
+        target: 目标位置
+        ped_type: 行人类型
+    """
+    return Pedestrian.create_with_type(
+        id=id,
+        position=position,
+        velocity=np.zeros(2),
+        target=target,
+        ped_type=ped_type,
+        speed_variation=True
+    )

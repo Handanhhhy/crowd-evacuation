@@ -1,6 +1,11 @@
 """
 成都东客站地铁出站口强化学习环境
 适配3出口、闸机、柱子的复杂场景
+
+增强版本:
+- 支持多种行人类型 (老人、儿童、急躁型等)
+- 可选GBM行为预测修正
+- 更真实的行人行为 (等待、犹豫、恐慌)
 """
 
 import numpy as np
@@ -8,12 +13,18 @@ import gymnasium as gym
 from gymnasium import spaces
 from typing import Tuple, Dict, Any, Optional, List
 from dataclasses import dataclass
+import joblib
 
 # 导入社会力模型
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from sfm.social_force import SocialForceModel, Pedestrian
+from sfm.social_force import (
+    SocialForceModel,
+    Pedestrian,
+    PedestrianType,
+    PEDESTRIAN_TYPE_PARAMS
+)
 
 
 @dataclass
@@ -53,7 +64,23 @@ class MetroEvacuationEnv(gym.Env):
         max_steps: int = 1000,
         dt: float = 0.1,
         render_mode: Optional[str] = None,
+        # 增强行人行为参数
+        type_distribution: Optional[Dict[PedestrianType, float]] = None,
+        enable_enhanced_behaviors: bool = True,
+        gbm_model_path: Optional[str] = None,
     ):
+        """
+        Args:
+            n_pedestrians: 行人数量
+            scene_size: 场景尺寸 (宽, 高)
+            max_steps: 最大仿真步数
+            dt: 时间步长
+            render_mode: 渲染模式
+            type_distribution: 行人类型分布比例
+                默认: 70%普通 + 15%老人 + 10%儿童 + 5%急躁
+            enable_enhanced_behaviors: 是否启用增强行为 (等待、犹豫、恐慌)
+            gbm_model_path: GBM行为预测模型路径 (可选)
+        """
         super().__init__()
 
         self.n_pedestrians = n_pedestrians
@@ -61,6 +88,23 @@ class MetroEvacuationEnv(gym.Env):
         self.max_steps = max_steps
         self.dt = dt
         self.render_mode = render_mode
+
+        # 增强行为配置
+        self.enable_enhanced_behaviors = enable_enhanced_behaviors
+
+        # 行人类型分布 (默认比例基于一般人群构成)
+        self.type_distribution = type_distribution or {
+            PedestrianType.NORMAL: 0.70,
+            PedestrianType.ELDERLY: 0.15,
+            PedestrianType.CHILD: 0.10,
+            PedestrianType.IMPATIENT: 0.05,
+        }
+
+        # GBM行为预测器 (可选)
+        self.gbm_predictor = None
+        self.gbm_model_path = gbm_model_path
+        if gbm_model_path:
+            self._load_gbm_predictor(gbm_model_path)
 
         # 定义3个出口
         self.exits = [
@@ -100,6 +144,7 @@ class MetroEvacuationEnv(gym.Env):
         self.current_step = 0
         self.evacuated_count = 0
         self.evacuated_by_exit = {'A': 0, 'B': 0, 'C': 0}
+        self.evacuated_by_type = {t: 0 for t in PedestrianType}  # 按类型统计
 
         # 记录
         self.history = {
@@ -108,9 +153,45 @@ class MetroEvacuationEnv(gym.Env):
             'rewards': []
         }
 
+    def _load_gbm_predictor(self, model_path: str) -> bool:
+        """加载GBM行为预测模型
+
+        Args:
+            model_path: 模型文件路径
+
+        Returns:
+            是否加载成功
+        """
+        try:
+            from ml.gbm_predictor import GBMPredictor
+            self.gbm_predictor = GBMPredictor()
+            self.gbm_predictor.load(model_path)
+            print(f"GBM行为预测模型已加载: {model_path}")
+            return True
+        except Exception as e:
+            print(f"GBM模型加载失败: {e}")
+            self.gbm_predictor = None
+            return False
+
     def _create_sfm(self) -> SocialForceModel:
-        """创建社会力模型实例（包含地铁站场景的障碍物）"""
-        sfm = SocialForceModel(tau=0.5, A=2000.0, B=0.08)
+        """创建社会力模型实例（包含地铁站场景的障碍物）
+
+        如果启用增强行为，将开启等待、犹豫、恐慌等特性
+        """
+        sfm = SocialForceModel(
+            tau=0.5,
+            A=2000.0,
+            B=0.08,
+            wall_A=5000.0,    # Increased to prevent pedestrians getting stuck
+            wall_B=0.1,       # Increased range for earlier obstacle detection
+            # Enhanced behavior parameters
+            enable_waiting=self.enable_enhanced_behaviors,
+            enable_perturbation=self.enable_enhanced_behaviors,
+            enable_panic=self.enable_enhanced_behaviors,
+            waiting_density_threshold=0.8,
+            perturbation_sigma=0.1,
+            panic_density_threshold=1.5,
+        )
 
         # 外墙
         # 上墙（有出口C的间隔）
@@ -151,8 +232,26 @@ class MetroEvacuationEnv(gym.Env):
         return sfm
 
     def _spawn_pedestrians(self, target_exit_id: int = 2):
-        """生成行人（从站台区域）"""
+        """生成行人（从站台区域）
+
+        使用增强版本：
+        - 根据配置的类型分布创建不同类型的行人
+        - 老人、儿童、急躁型等具有不同的速度和行为特征
+
+        文献参数:
+        - NORMAL: 1.34 m/s (Helbing 1995)
+        - ELDERLY: 0.9 m/s (Weidmann 1993)
+        - CHILD: 0.7 m/s (Fruin 1971)
+        - IMPATIENT: 1.6 m/s
+        """
         target = self.exits[target_exit_id].position
+
+        # 准备类型分布
+        types = list(self.type_distribution.keys())
+        probs = list(self.type_distribution.values())
+        # 归一化概率
+        total = sum(probs)
+        probs = [p / total for p in probs]
 
         for i in range(self.n_pedestrians):
             # 在站台区域随机生成
@@ -174,12 +273,17 @@ class MetroEvacuationEnv(gym.Env):
             choice = np.random.choice([0, 1, 2], p=weights)
             initial_target = self.exits[choice].position.copy()
 
-            ped = Pedestrian(
+            # 随机选择行人类型
+            ped_type = np.random.choice(types, p=probs)
+
+            # 使用工厂方法创建带类型的行人
+            ped = Pedestrian.create_with_type(
                 id=i,
                 position=position,
                 velocity=velocity,
                 target=initial_target,
-                desired_speed=np.random.uniform(1.0, 1.6)
+                ped_type=ped_type,
+                speed_variation=True
             )
             self.sfm.add_pedestrian(ped)
 
@@ -200,6 +304,7 @@ class MetroEvacuationEnv(gym.Env):
         self.current_step = 0
         self.evacuated_count = 0
         self.evacuated_by_exit = {'A': 0, 'B': 0, 'C': 0}
+        self.evacuated_by_type = {t: 0 for t in PedestrianType}
 
         self.history = {
             'evacuated': [],
@@ -290,7 +395,9 @@ class MetroEvacuationEnv(gym.Env):
             'evacuated': self.evacuated_count,
             'remaining': len(self.sfm.pedestrians),
             'step': self.current_step,
-            'evacuated_by_exit': self.evacuated_by_exit.copy()
+            'evacuated_by_exit': self.evacuated_by_exit.copy(),
+            'evacuated_by_type': {t.value: c for t, c in self.evacuated_by_type.items()},
+            'enhanced_behaviors': self.enable_enhanced_behaviors,
         }
 
         return obs, reward, terminated, truncated, info
@@ -321,7 +428,10 @@ class MetroEvacuationEnv(gym.Env):
                     ped.target = target_exit.position.copy()
 
     def _check_evacuated(self):
-        """检查并移除已疏散的行人"""
+        """检查并移除已疏散的行人
+
+        增强版本: 同时统计按类型的疏散数量
+        """
         evacuated = []
         for ped in self.sfm.pedestrians:
             for exit_obj in self.exits:
@@ -330,6 +440,8 @@ class MetroEvacuationEnv(gym.Env):
                     evacuated.append((ped, exit_obj.name))
                     self.evacuated_count += 1
                     self.evacuated_by_exit[exit_obj.name] += 1
+                    # 按类型统计
+                    self.evacuated_by_type[ped.ped_type] += 1
                     break
 
         for ped, _ in evacuated:
@@ -377,10 +489,21 @@ class MetroEvacuationEnv(gym.Env):
     def render(self):
         """渲染（简单版本，用于调试）"""
         if self.render_mode == "human":
+            # 按出口统计
+            exit_stats = f"A:{self.evacuated_by_exit['A']}, B:{self.evacuated_by_exit['B']}, C:{self.evacuated_by_exit['C']}"
+
+            # 按类型统计
+            type_stats = ", ".join([
+                f"{t.value}:{c}" for t, c in self.evacuated_by_type.items() if c > 0
+            ])
+            if not type_stats:
+                type_stats = "无"
+
             print(f"Step {self.current_step}: "
-                  f"Evacuated {self.evacuated_count}/{self.n_pedestrians} "
-                  f"(A:{self.evacuated_by_exit['A']}, B:{self.evacuated_by_exit['B']}, C:{self.evacuated_by_exit['C']}), "
-                  f"Remaining {len(self.sfm.pedestrians)}")
+                  f"疏散 {self.evacuated_count}/{self.n_pedestrians} "
+                  f"(出口: {exit_stats}) "
+                  f"(类型: {type_stats}), "
+                  f"剩余 {len(self.sfm.pedestrians)}")
 
     def close(self):
         """关闭环境"""

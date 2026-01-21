@@ -1,6 +1,11 @@
 """
 训练 PPO 模型优化地铁站疏散策略
 适配成都东客站3出口场景
+
+支持GPU加速:
+- macOS: MPS (Apple Silicon)
+- Linux/Windows: CUDA (NVIDIA GPU)
+- 无GPU时自动回退到CPU
 """
 
 import sys
@@ -12,11 +17,31 @@ sys.path.insert(0, str(project_root / "src"))
 
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from simulation.metro_evacuation_env import MetroEvacuationEnv
+
+
+def get_device():
+    """自动检测最佳训练设备
+
+    Returns:
+        str: 'cuda' (NVIDIA GPU), 'mps' (Apple Silicon), 或 'cpu'
+    """
+    if torch.cuda.is_available():
+        device = "cuda"
+        gpu_name = torch.cuda.get_device_name(0)
+        print(f"检测到 NVIDIA GPU: {gpu_name}")
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        print("检测到 Apple Silicon GPU (MPS)")
+    else:
+        device = "cpu"
+        print("未检测到GPU，使用CPU训练")
+    return device
 
 
 class MetroTrainingCallback(BaseCallback):
@@ -66,10 +91,14 @@ def train_ppo_metro():
     # 包装为向量环境
     vec_env = DummyVecEnv([lambda: env])
 
+    # 检测训练设备
+    device = get_device()
+
     # 创建 PPO 模型
     print("\n[2/4] 创建 PPO 模型...")
     print("  - 观测空间: 8维 (3出口密度 + 3出口拥堵度 + 剩余比例 + 时间比例)")
     print("  - 动作空间: Discrete(3) (选择推荐出口A/B/C)")
+    print(f"  - 训练设备: {device.upper()}")
 
     model = PPO(
         "MlpPolicy",
@@ -83,7 +112,7 @@ def train_ppo_metro():
         clip_range=0.2,
         ent_coef=0.01,       # 熵系数，鼓励探索
         verbose=1,
-        device="cpu"
+        device=device        # 自动检测: cuda/mps/cpu
     )
 
     # 训练

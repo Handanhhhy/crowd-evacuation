@@ -44,17 +44,48 @@ class GBMPredictor:
         self.target_names = None
         self.is_fitted = False
 
+    def _check_gpu_available(self) -> bool:
+        """检查GPU是否可用于XGBoost"""
+        try:
+            import torch
+            return torch.cuda.is_available()
+        except ImportError:
+            return False
+
     def _create_model(self):
-        """创建模型"""
+        """创建模型
+
+        自动检测GPU并使用加速:
+        - NVIDIA GPU: 使用 tree_method='gpu_hist'
+        - 其他: 使用CPU (tree_method='hist')
+        """
         if self.model_type == "xgboost":
-            base_model = xgb.XGBRegressor(
-                n_estimators=self.n_estimators,
-                max_depth=self.max_depth,
-                learning_rate=self.learning_rate,
-                random_state=self.random_state,
-                n_jobs=-1,
-                verbosity=0
-            )
+            # 检测GPU
+            use_gpu = self._check_gpu_available()
+
+            if use_gpu:
+                # GPU加速配置
+                base_model = xgb.XGBRegressor(
+                    n_estimators=self.n_estimators,
+                    max_depth=self.max_depth,
+                    learning_rate=self.learning_rate,
+                    random_state=self.random_state,
+                    tree_method='gpu_hist',  # GPU加速
+                    predictor='gpu_predictor',
+                    n_jobs=-1,
+                    verbosity=0
+                )
+            else:
+                # CPU配置
+                base_model = xgb.XGBRegressor(
+                    n_estimators=self.n_estimators,
+                    max_depth=self.max_depth,
+                    learning_rate=self.learning_rate,
+                    random_state=self.random_state,
+                    tree_method='hist',  # CPU快速方法
+                    n_jobs=-1,
+                    verbosity=0
+                )
         else:
             base_model = GradientBoostingRegressor(
                 n_estimators=self.n_estimators,

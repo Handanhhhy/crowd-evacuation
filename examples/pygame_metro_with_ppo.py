@@ -1,6 +1,11 @@
 """
 成都东客站地铁出站口疏散仿真 - 集成PPO智能引导
 社会力模型 + PPO强化学习动态优化出口选择
+
+增强版本:
+- 支持多种行人类型可视化 (不同颜色)
+- 显示GBM行为预测器状态
+- 显示行人行为状态 (等待、恐慌)
 """
 
 import sys
@@ -12,7 +17,12 @@ sys.path.insert(0, str(project_root / "src"))
 import numpy as np
 import pygame
 from stable_baselines3 import PPO
-from sfm.social_force import SocialForceModel, Pedestrian
+from sfm.social_force import (
+    SocialForceModel,
+    Pedestrian,
+    PedestrianType,
+    PEDESTRIAN_TYPE_PARAMS
+)
 
 
 # 颜色定义
@@ -32,6 +42,14 @@ BG_COLOR = (240, 240, 235)
 FLOOR_COLOR = (220, 220, 210)
 GATE_COLOR = (100, 100, 100)
 
+# 行人类型颜色映射 (基于文献参数配置)
+PEDESTRIAN_TYPE_COLORS = {
+    PedestrianType.NORMAL: BLUE,        # 普通成年人: 蓝色
+    PedestrianType.ELDERLY: GREEN,      # 老人: 绿色
+    PedestrianType.CHILD: YELLOW,       # 儿童: 黄色
+    PedestrianType.IMPATIENT: RED,      # 急躁型: 红色
+}
+
 
 class MetroStationWithPPO:
     """成都东客站地铁出站口 - PPO智能引导版"""
@@ -41,19 +59,42 @@ class MetroStationWithPPO:
         n_pedestrians: int = 80,
         scale: float = 12.0,
         dt: float = 0.05,
-        use_ppo: bool = True
+        use_ppo: bool = True,
+        enable_enhanced_behaviors: bool = True,
+        show_type_colors: bool = True,
+        type_distribution: dict = None
     ):
+        """
+        Args:
+            n_pedestrians: 行人数量
+            scale: 像素/米比例
+            dt: 时间步长
+            use_ppo: 是否使用PPO智能引导
+            enable_enhanced_behaviors: 是否启用增强行为 (等待、犹豫、恐慌)
+            show_type_colors: 是否按类型显示颜色 (否则按速度显示)
+            type_distribution: 行人类型分布比例
+        """
         self.n_pedestrians = n_pedestrians
         self.scale = scale
         self.dt = dt
         self.use_ppo = use_ppo
+        self.enable_enhanced_behaviors = enable_enhanced_behaviors
+        self.show_type_colors = show_type_colors
+
+        # 行人类型分布 (默认: 70%普通 + 15%老人 + 10%儿童 + 5%急躁)
+        self.type_distribution = type_distribution or {
+            PedestrianType.NORMAL: 0.70,
+            PedestrianType.ELDERLY: 0.15,
+            PedestrianType.CHILD: 0.10,
+            PedestrianType.IMPATIENT: 0.05,
+        }
 
         # 场景尺寸
         self.scene_width = 60.0
         self.scene_height = 40.0
 
-        # 窗口大小
-        self.window_width = int(self.scene_width * scale) + 220
+        # 窗口大小 (增加信息面板宽度)
+        self.window_width = int(self.scene_width * scale) + 260
         self.window_height = int(self.scene_height * scale) + 60
 
         # 闸机位置
@@ -66,11 +107,11 @@ class MetroStationWithPPO:
                 'length': 3.0
             })
 
-        # 出口定义
+        # Exit definitions
         self.exits = [
-            {'id': 0, 'name': 'A', 'position': np.array([60, 10]), 'width': 4.0, 'label': '出口A'},
-            {'id': 1, 'name': 'B', 'position': np.array([60, 30]), 'width': 4.0, 'label': '出口B'},
-            {'id': 2, 'name': 'C', 'position': np.array([40, 40]), 'width': 5.0, 'label': '出口C (主出口)'},
+            {'id': 0, 'name': 'A', 'position': np.array([60, 10]), 'width': 4.0, 'label': 'Exit A'},
+            {'id': 1, 'name': 'B', 'position': np.array([60, 30]), 'width': 4.0, 'label': 'Exit B'},
+            {'id': 2, 'name': 'C', 'position': np.array([40, 40]), 'width': 5.0, 'label': 'Exit C (Main)'},
         ]
 
         # 柱子位置
@@ -80,10 +121,10 @@ class MetroStationWithPPO:
             np.array([35, 20]), np.array([50, 20]),
         ]
 
-        # 设施
+        # Facilities
         self.facilities = [
-            {'type': 'info', 'position': np.array([32, 20]), 'size': (3, 2), 'label': '信息台'},
-            {'type': 'stairs', 'position': np.array([55, 20]), 'size': (4, 8), 'label': '楼梯'},
+            {'type': 'info', 'position': np.array([32, 20]), 'size': (3, 2), 'label': 'Info'},
+            {'type': 'stairs', 'position': np.array([55, 20]), 'size': (4, 8), 'label': 'Stairs'},
         ]
 
         # PPO模型
@@ -92,10 +133,15 @@ class MetroStationWithPPO:
         self.ppo_update_interval = 10  # 每10步更新一次PPO决策
         self.is_metro_model = False  # 是否使用地铁站专用模型（3出口）
 
+        # GBM行为预测模型
+        self.gbm_predictor = None
+        self.gbm_loaded = False
+
         # 状态
         self.model = None
         self.evacuated_count = 0
         self.evacuated_by_exit = {'A': 0, 'B': 0, 'C': 0}
+        self.evacuated_by_type = {t: 0 for t in PedestrianType}
         self.step_count = 0
         self.running = True
         self.paused = False
@@ -137,6 +183,29 @@ class MetroStationWithPPO:
             print("  提示: 运行 python examples/train_ppo_metro.py 训练地铁站模型")
             return False
 
+    def load_gbm_predictor(self):
+        """加载GBM行为预测模型"""
+        gbm_model_path = project_root / "outputs" / "models" / "gbm_behavior.joblib"
+
+        if gbm_model_path.exists():
+            try:
+                from ml.gbm_predictor import GBMPredictor
+                self.gbm_predictor = GBMPredictor()
+                self.gbm_predictor.load(str(gbm_model_path))
+                self.gbm_loaded = True
+                print(f"GBM行为预测模型已加载: {gbm_model_path}")
+                return True
+            except Exception as e:
+                print(f"加载GBM模型失败: {e}")
+                self.gbm_predictor = None
+                self.gbm_loaded = False
+                return False
+        else:
+            print("未找到GBM行为预测模型")
+            print("  提示: 运行 python examples/train_gbm_behavior.py 训练模型")
+            self.gbm_loaded = False
+            return False
+
     def world_to_screen(self, pos):
         """世界坐标转屏幕坐标"""
         x = int(pos[0] * self.scale) + 50
@@ -144,8 +213,28 @@ class MetroStationWithPPO:
         return (x, y)
 
     def setup_model(self):
-        """初始化社会力模型"""
-        self.model = SocialForceModel(tau=0.5, A=2000.0, B=0.08)
+        """初始化社会力模型
+
+        增强版本:
+        - 支持等待、犹豫、恐慌等行为
+        - 支持多种行人类型
+        """
+        # Create enhanced social force model
+        # Increased wall_A to prevent pedestrians getting stuck
+        self.model = SocialForceModel(
+            tau=0.5,
+            A=2000.0,
+            B=0.08,
+            wall_A=5000.0,    # Increased from 2000 to prevent getting stuck
+            wall_B=0.1,       # Increased range for earlier obstacle detection
+            # Enhanced behavior parameters
+            enable_waiting=self.enable_enhanced_behaviors,
+            enable_perturbation=self.enable_enhanced_behaviors,
+            enable_panic=self.enable_enhanced_behaviors,
+            waiting_density_threshold=0.8,
+            perturbation_sigma=0.1,
+            panic_density_threshold=1.5,
+        )
 
         # 外墙
         self.model.add_obstacle(np.array([0, self.scene_height]), np.array([35, self.scene_height]))
@@ -178,7 +267,13 @@ class MetroStationWithPPO:
             self.model.add_obstacle(np.array([pos[0] - w/2, pos[1] - h/2]), np.array([pos[0] - w/2, pos[1] + h/2]))
             self.model.add_obstacle(np.array([pos[0] + w/2, pos[1] - h/2]), np.array([pos[0] + w/2, pos[1] + h/2]))
 
-        # 添加行人
+        # 准备类型分布
+        types = list(self.type_distribution.keys())
+        probs = list(self.type_distribution.values())
+        total = sum(probs)
+        probs = [p / total for p in probs]
+
+        # 添加行人 (使用类型分布)
         np.random.seed(None)
         for i in range(self.n_pedestrians):
             position = np.array([
@@ -187,17 +282,23 @@ class MetroStationWithPPO:
             ])
             target = self._choose_initial_exit(position)
 
-            ped = Pedestrian(
+            # 随机选择行人类型
+            ped_type = np.random.choice(types, p=probs)
+
+            # 使用工厂方法创建带类型的行人
+            ped = Pedestrian.create_with_type(
                 id=i,
                 position=position,
                 velocity=np.zeros(2),
                 target=target.copy(),
-                desired_speed=np.random.uniform(1.0, 1.6)
+                ped_type=ped_type,
+                speed_variation=True
             )
             self.model.add_pedestrian(ped)
 
         self.evacuated_count = 0
         self.evacuated_by_exit = {'A': 0, 'B': 0, 'C': 0}
+        self.evacuated_by_type = {t: 0 for t in PedestrianType}
         self.step_count = 0
         self.current_action = 0
 
@@ -426,91 +527,146 @@ class MetroStationWithPPO:
         for ped in self.model.pedestrians:
             screen_pos = self.world_to_screen(ped.position)
             radius = int(0.35 * self.scale)
-            speed = ped.speed
 
-            if speed < 0.3:
-                color = RED
-            elif speed < 0.8:
-                color = ORANGE
+            if self.show_type_colors:
+                # 按行人类型着色
+                base_color = PEDESTRIAN_TYPE_COLORS.get(ped.ped_type, BLUE)
+
+                # 如果行人在等待或恐慌，修改颜色
+                if ped.is_waiting:
+                    # 等待时显示更暗的颜色
+                    color = tuple(max(0, c - 50) for c in base_color)
+                elif ped.panic_factor > 0.2:
+                    # 恐慌时添加红色调
+                    r = min(255, base_color[0] + int(100 * ped.panic_factor))
+                    color = (r, base_color[1], base_color[2])
+                else:
+                    color = base_color
             else:
-                color = BLUE
+                # 按速度着色 (原始逻辑)
+                speed = ped.speed
+                if speed < 0.3:
+                    color = RED
+                elif speed < 0.8:
+                    color = ORANGE
+                else:
+                    color = BLUE
 
             pygame.draw.circle(screen, color, screen_pos, radius)
-            pygame.draw.circle(screen, DARK_BLUE, screen_pos, radius, 1)
 
-        # 区域标签
-        platform_label = font.render("站台区", True, (100, 80, 60))
+            # 边框颜色 (等待时用白色突出显示)
+            border_color = WHITE if ped.is_waiting else DARK_BLUE
+            pygame.draw.circle(screen, border_color, screen_pos, radius, 1)
+
+        # Area labels
+        platform_label = font.render("Platform", True, (100, 80, 60))
         screen.blit(platform_label, self.world_to_screen(np.array([3, 22])))
-        gate_label = font.render("闸机", True, BLACK)
+        gate_label = font.render("Gate", True, BLACK)
         screen.blit(gate_label, self.world_to_screen(np.array([18, 36])))
-        hall_label = font.render("出站大厅", True, (80, 80, 80))
+        hall_label = font.render("Exit Hall", True, (80, 80, 80))
         screen.blit(hall_label, self.world_to_screen(np.array([38, 22])))
 
         # 信息面板
         self.draw_info_panel(screen, font, font_small)
 
     def draw_info_panel(self, screen, font, font_small):
-        """绘制信息面板"""
+        """Draw info panel (English version)"""
         panel_x = int(self.scene_width * self.scale) + 70
         panel_y = 20
 
         time_elapsed = self.step_count * self.dt * 3
         remaining = len(self.model.pedestrians)
 
-        # 标题
-        title = font.render("成都东客站出站口", True, BLACK)
+        # Title
+        title = font.render("Metro Station Exit", True, BLACK)
         screen.blit(title, (panel_x, panel_y))
 
-        # PPO状态
+        # PPO status
         if self.ppo_model is not None and self.use_ppo:
-            model_type = "3出口" if self.is_metro_model else "2出口"
-            ppo_status = font_small.render(f"PPO智能引导: ON ({model_type})", True, PURPLE)
+            model_type = "3-exit" if self.is_metro_model else "2-exit"
+            ppo_status = font_small.render(f"PPO Guidance: ON ({model_type})", True, PURPLE)
             recommended = self.exits[min(self.current_action, 2)]['name']
-            ppo_action = font_small.render(f"推荐出口: {recommended}", True, PURPLE)
+            ppo_action = font_small.render(f"Recommend: Exit {recommended}", True, PURPLE)
         else:
-            ppo_status = font_small.render("PPO智能引导: OFF", True, GRAY)
-            ppo_action = font_small.render("(按P键开启)", True, GRAY)
+            ppo_status = font_small.render("PPO Guidance: OFF", True, GRAY)
+            ppo_action = font_small.render("(Press P to enable)", True, GRAY)
 
         screen.blit(ppo_status, (panel_x, panel_y + 25))
         screen.blit(ppo_action, (panel_x, panel_y + 45))
 
+        # GBM status
+        if self.gbm_loaded:
+            gbm_status = font_small.render("GBM Predictor: ON", True, GREEN)
+        else:
+            gbm_status = font_small.render("GBM Predictor: OFF", True, GRAY)
+        screen.blit(gbm_status, (panel_x, panel_y + 65))
+
+        # Enhanced behavior status
+        if self.enable_enhanced_behaviors:
+            behavior_status = font_small.render("Enhanced Behavior: ON", True, GREEN)
+        else:
+            behavior_status = font_small.render("Enhanced Behavior: OFF", True, GRAY)
+        screen.blit(behavior_status, (panel_x, panel_y + 85))
+
         lines = [
             "",
-            f"时间: {time_elapsed:.1f}秒",
-            f"已疏散: {self.evacuated_count}",
-            f"剩余: {remaining}",
-            f"总人数: {self.n_pedestrians}",
+            f"Time: {time_elapsed:.1f}s",
+            f"Evacuated: {self.evacuated_count}",
+            f"Remaining: {remaining}",
+            f"Total: {self.n_pedestrians}",
             "",
-            "各出口疏散:",
-            f"  出口A: {self.evacuated_by_exit['A']}",
-            f"  出口B: {self.evacuated_by_exit['B']}",
-            f"  出口C: {self.evacuated_by_exit['C']}",
+            "By Exit:",
+            f"  Exit A: {self.evacuated_by_exit['A']}",
+            f"  Exit B: {self.evacuated_by_exit['B']}",
+            f"  Exit C: {self.evacuated_by_exit['C']}",
             "",
-            "== 操作 ==",
-            "空格: 暂停/继续",
-            "P: 开关PPO引导",
-            "R: 重新开始",
-            "ESC: 退出",
+            "By Type:",
+            f"  Normal: {self.evacuated_by_type.get(PedestrianType.NORMAL, 0)}",
+            f"  Elderly: {self.evacuated_by_type.get(PedestrianType.ELDERLY, 0)}",
+            f"  Child: {self.evacuated_by_type.get(PedestrianType.CHILD, 0)}",
+            f"  Impatient: {self.evacuated_by_type.get(PedestrianType.IMPATIENT, 0)}",
             "",
-            "== 图例 ==",
+            "== Controls ==",
+            "SPACE: Pause/Resume",
+            "P: Toggle PPO",
+            "T: Toggle color mode",
+            "R: Restart",
+            "ESC: Exit",
         ]
 
         for i, line in enumerate(lines):
             text = font_small.render(line, True, BLACK)
-            screen.blit(text, (panel_x, panel_y + 65 + i * 18))
+            screen.blit(text, (panel_x, panel_y + 105 + i * 16))
 
-        # 图例
-        legend_y = panel_y + 65 + len(lines) * 18
-        legends = [
-            (BLUE, "正常行走"),
-            (ORANGE, "速度较慢"),
-            (RED, "拥堵"),
-            (PURPLE, "PPO推荐出口"),
-        ]
+        # Legend
+        legend_y = panel_y + 105 + len(lines) * 16 + 10
+
+        legend_title = font_small.render("== Legend ==", True, BLACK)
+        screen.blit(legend_title, (panel_x, legend_y))
+        legend_y += 20
+
+        if self.show_type_colors:
+            # Type color legend
+            legends = [
+                (PEDESTRIAN_TYPE_COLORS[PedestrianType.NORMAL], "Normal Adult"),
+                (PEDESTRIAN_TYPE_COLORS[PedestrianType.ELDERLY], "Elderly"),
+                (PEDESTRIAN_TYPE_COLORS[PedestrianType.CHILD], "Child"),
+                (PEDESTRIAN_TYPE_COLORS[PedestrianType.IMPATIENT], "Impatient"),
+                (PURPLE, "PPO Recommended"),
+            ]
+        else:
+            # Speed color legend
+            legends = [
+                (BLUE, "Normal Speed"),
+                (ORANGE, "Slow"),
+                (RED, "Congested"),
+                (PURPLE, "PPO Recommended"),
+            ]
+
         for i, (color, label) in enumerate(legends):
-            pygame.draw.circle(screen, color, (panel_x + 10, legend_y + i * 20 + 8), 6)
+            pygame.draw.circle(screen, color, (panel_x + 10, legend_y + i * 18 + 6), 5)
             text = font_small.render(label, True, BLACK)
-            screen.blit(text, (panel_x + 25, legend_y + i * 20))
+            screen.blit(text, (panel_x + 25, legend_y + i * 18))
 
     def update(self):
         """更新模拟"""
@@ -539,25 +695,25 @@ class MetroStationWithPPO:
             self.model.pedestrians.remove(ped)
             self.evacuated_count += 1
             self.evacuated_by_exit[exit_name] += 1
+            # 按类型统计
+            self.evacuated_by_type[ped.ped_type] += 1
 
         self.step_count += 1
 
     def run(self):
-        """运行可视化"""
+        """Run visualization"""
         pygame.init()
         screen = pygame.display.set_mode((self.window_width, self.window_height))
-        pygame.display.set_caption("成都东客站疏散仿真 - 社会力模型 + PPO智能引导")
+        pygame.display.set_caption("Metro Evacuation - SFM + PPO Guidance")
         clock = pygame.time.Clock()
 
-        try:
-            font = pygame.font.SysFont('PingFang SC', 18)
-            font_small = pygame.font.SysFont('PingFang SC', 14)
-        except:
-            font = pygame.font.SysFont('Arial', 18)
-            font_small = pygame.font.SysFont('Arial', 14)
+        # Use Arial font to avoid encoding issues
+        font = pygame.font.SysFont('Arial', 18)
+        font_small = pygame.font.SysFont('Arial', 14)
 
-        # 加载PPO模型
+        # Load PPO model and GBM model
         self.load_ppo_model()
+        self.load_gbm_predictor()
         self.setup_model()
 
         while self.running:
@@ -572,10 +728,15 @@ class MetroStationWithPPO:
                     elif event.key == pygame.K_r:
                         self.setup_model()
                     elif event.key == pygame.K_p:
-                        # 切换PPO开关
+                        # Toggle PPO
                         if self.ppo_model is not None:
                             self.use_ppo = not self.use_ppo
-                            print(f"PPO引导: {'开启' if self.use_ppo else '关闭'}")
+                            print(f"PPO Guidance: {'ON' if self.use_ppo else 'OFF'}")
+                    elif event.key == pygame.K_t:
+                        # Toggle color mode (by type/by speed)
+                        self.show_type_colors = not self.show_type_colors
+                        mode = "by Type" if self.show_type_colors else "by Speed"
+                        print(f"Color Mode: {mode}")
 
             self.update()
             self.draw_scene(screen, font, font_small)
@@ -585,34 +746,56 @@ class MetroStationWithPPO:
             if len(self.model.pedestrians) == 0 and not self.paused:
                 self.paused = True
                 time_elapsed = self.step_count * self.dt * 3
-                print(f"\n疏散完成!")
-                print(f"总用时: {time_elapsed:.1f}秒")
-                print(f"各出口: A={self.evacuated_by_exit['A']}, "
+                print(f"\nEvacuation Complete!")
+                print(f"Total Time: {time_elapsed:.1f}s")
+                print(f"By Exit: A={self.evacuated_by_exit['A']}, "
                       f"B={self.evacuated_by_exit['B']}, C={self.evacuated_by_exit['C']}")
-                print(f"PPO引导: {'开启' if self.use_ppo else '关闭'}")
+                print(f"By Type: Normal={self.evacuated_by_type.get(PedestrianType.NORMAL, 0)}, "
+                      f"Elderly={self.evacuated_by_type.get(PedestrianType.ELDERLY, 0)}, "
+                      f"Child={self.evacuated_by_type.get(PedestrianType.CHILD, 0)}, "
+                      f"Impatient={self.evacuated_by_type.get(PedestrianType.IMPATIENT, 0)}")
+                print(f"PPO Guidance: {'ON' if self.use_ppo else 'OFF'}")
+                print(f"Enhanced Behaviors: {'ON' if self.enable_enhanced_behaviors else 'OFF'}")
 
         pygame.quit()
 
 
 def main():
-    print("=" * 50)
-    print("成都东客站疏散仿真 - PPO智能引导版")
-    print("=" * 50)
-    print("\n模型说明:")
-    print("  - 社会力模型(SFM): 行人运动仿真")
-    print("  - PPO强化学习: 动态引导出口选择")
-    print("\n控制:")
-    print("  空格 - 暂停/继续")
-    print("  P    - 开关PPO智能引导")
-    print("  R    - 重新开始")
-    print("  ESC  - 退出")
+    print("=" * 60)
+    print("Metro Station Evacuation Simulation - Enhanced")
+    print("Social Force Model + PPO Guidance + Pedestrian Types")
+    print("=" * 60)
+    print("\nModels:")
+    print("  - Social Force Model (SFM): Pedestrian dynamics (Helbing 1995)")
+    print("  - PPO Reinforcement Learning: Dynamic exit guidance")
+    print("  - GBM Behavior Predictor: Based on ETH/UCY dataset")
+    print("  - Pedestrian Types: Normal(70%), Elderly(15%), Child(10%), Impatient(5%)")
+    print("  - Enhanced Behaviors: Waiting, Hesitation, Panic")
+    print("\nLiterature:")
+    print("  - Helbing 1995: Desired speed 1.34 m/s")
+    print("  - Weidmann 1993: Elderly speed 0.9 m/s")
+    print("  - Fruin 1971: Child speed 0.7 m/s")
+    print("\nControls:")
+    print("  SPACE - Pause/Resume")
+    print("  P     - Toggle PPO guidance")
+    print("  T     - Toggle color mode (by type/by speed)")
+    print("  R     - Restart")
+    print("  ESC   - Exit")
     print()
 
     visualizer = MetroStationWithPPO(
         n_pedestrians=80,
         scale=12.0,
         dt=0.05,
-        use_ppo=True
+        use_ppo=True,
+        enable_enhanced_behaviors=True,
+        show_type_colors=True,
+        type_distribution={
+            PedestrianType.NORMAL: 0.70,
+            PedestrianType.ELDERLY: 0.15,
+            PedestrianType.CHILD: 0.10,
+            PedestrianType.IMPATIENT: 0.05,
+        }
     )
     visualizer.run()
 

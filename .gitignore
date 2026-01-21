@@ -18,9 +18,9 @@ ENV/
 .ipynb_checkpoints/
 
 # 数据和模型文件（太大不上传）
-data/raw/
-outputs/models/*.joblib
-outputs/models/*.zip
+# data/raw/
+# outputs/models/*.joblib
+# outputs/models/*.zip
 
 # 日志
 outputs/logs/
