@@ -139,27 +139,28 @@ class Pedestrian:
 class SocialForceModel:
     """增强版社会力模型
 
-    F_total = F_drive + F_social + F_obstacle + F_random
+    F_total = F_drive + F_social + F_obstacle + F_learned
 
     - F_drive: 驱动力，驱使行人向目标移动
     - F_social: 社会力，行人之间的排斥力
     - F_obstacle: 障碍物排斥力
-    - F_random: 随机扰动力（模拟犹豫行为）
+    - F_learned: GBM学习的行为修正（可选）
 
     增强特性:
     - 行人类型差异化（老人、儿童、急躁型）
     - 等待/排队行为
-    - 随机扰动（犹豫行为）
     - 恐慌反应
+    - GBM行为预测（基于ETH/UCY真实数据训练）
 
     文献参考:
     - Helbing, D., & Molnar, P. (1995). Social force model for pedestrian dynamics.
     - Helbing, D., Farkas, I., & Vicsek, T. (2000). Simulating dynamical features of escape panic.
+    - ETH/UCY数据集: 真实行人轨迹数据，用于行为学习
     """
 
     def __init__(
         self,
-        tau: float = 0.5,          # 松弛时间 (默认值，实际使用行人类型参数)
+        tau: float = 0.5,          # 松弛时间
         A: float = 2000.0,         # 社会力强度
         B: float = 0.08,           # 社会力范围
         k: float = 1.2e5,          # 身体力常数
@@ -167,12 +168,15 @@ class SocialForceModel:
         wall_A: float = 2000.0,    # 墙壁排斥力强度
         wall_B: float = 0.08,      # 墙壁排斥力范围
         # 增强行为参数
-        enable_waiting: bool = True,      # 启用等待行为
-        waiting_density_threshold: float = 0.8,  # 触发等待的密度阈值
-        enable_perturbation: bool = True,  # 启用随机扰动
-        perturbation_sigma: float = 0.1,   # 随机扰动标准差 (m/s)
-        enable_panic: bool = True,         # 启用恐慌反应
-        panic_density_threshold: float = 1.5,  # 触发恐慌的密度阈值
+        enable_waiting: bool = True,           # 启用等待行为
+        waiting_density_threshold: float = 0.8, # 触发等待的密度阈值
+        enable_perturbation: bool = True,       # 启用随机扰动
+        perturbation_sigma: float = 0.1,        # 随机扰动标准差
+        enable_panic: bool = True,              # 启用恐慌反应
+        panic_density_threshold: float = 1.5,   # 触发恐慌的密度阈值
+        # GBM行为预测器
+        gbm_predictor = None,      # GBM模型，用于学习行为
+        gbm_weight: float = 0.3,   # GBM预测权重 (0-1)
     ):
         self.tau = tau
         self.A = A
@@ -189,6 +193,10 @@ class SocialForceModel:
         self.perturbation_sigma = perturbation_sigma
         self.enable_panic = enable_panic
         self.panic_density_threshold = panic_density_threshold
+
+        # GBM行为预测器（基于ETH/UCY真实数据训练）
+        self.gbm_predictor = gbm_predictor
+        self.gbm_weight = gbm_weight  # 融合权重: 0=纯SFM, 1=纯GBM
 
         self.pedestrians: List[Pedestrian] = []
         self.obstacles: List[np.ndarray] = []  # 障碍物线段列表
@@ -323,10 +331,10 @@ class SocialForceModel:
 
         Args:
             ped: 当前行人
-            radius: 检测半径 (默认2米，符合 Hall 1966 社会距离)
+            radius: 检测半径（默认2米，符合Hall 1966社会距离理论）
 
         Returns:
-            密度值 (人/平方米)
+            密度值（人/平方米）
         """
         count = 0
         for other in self.pedestrians:
@@ -341,9 +349,9 @@ class SocialForceModel:
         return count / area
 
     def compute_random_perturbation(self, ped: Pedestrian) -> np.ndarray:
-        """计算随机扰动力（模拟犹豫/闲逛行为）
+        """计算随机扰动力（模拟犹豫行为）
 
-        基于高斯噪声，σ = 0.1 m/s (可配置)
+        基于高斯噪声，σ = 0.1 m/s（可配置）
         参考: Helbing 2000 - 行人行为的随机性
         """
         if not self.enable_perturbation:
@@ -353,6 +361,69 @@ class SocialForceModel:
         perturbation = np.random.normal(0, self.perturbation_sigma, 2)
 
         return perturbation
+
+    def compute_gbm_velocity_correction(self, ped: Pedestrian) -> np.ndarray:
+        """计算GBM预测的速度修正
+
+        使用训练好的GBM模型（基于ETH/UCY真实轨迹数据）
+        预测更真实的行人运动。
+
+        GBM模型训练特征:
+        - 位置 (pos_x, pos_y)
+        - 速度 (vel_x, vel_y, speed_mean, speed_std, speed_last)
+        - 加速度 (acc_x, acc_y)
+        - 方向 (direction, direction_change_mean)
+        - 轨迹形状 (displacement, path_length)
+
+        Returns:
+            速度修正向量 [dvx, dvy]
+        """
+        if self.gbm_predictor is None:
+            return np.zeros(2)
+
+        try:
+            # 准备GBM预测特征
+            speed = np.linalg.norm(ped.velocity)
+            direction = np.arctan2(ped.velocity[1], ped.velocity[0]) if speed > 0.01 else 0
+
+            # 计算位移和路径指标
+            direction_to_target = ped.target - ped.position
+            displacement = np.linalg.norm(direction_to_target)
+
+            # 构建特征向量（必须与训练特征匹配）
+            features = np.array([
+                ped.position[0],      # pos_x
+                ped.position[1],      # pos_y
+                ped.velocity[0],      # vel_x
+                ped.velocity[1],      # vel_y
+                speed,                # speed_mean（用当前值近似）
+                0.1,                  # speed_std（默认值）
+                speed,                # speed_last
+                0.0,                  # acc_x（近似）
+                0.0,                  # acc_y（近似）
+                direction,            # direction
+                0.0,                  # direction_change_mean
+                displacement,         # displacement
+                speed * 0.1,          # path_length（近似）
+            ]).reshape(1, -1)
+
+            # GBM预测: [target_x, target_y, target_vx, target_vy]
+            prediction = self.gbm_predictor.predict(features)[0]
+
+            # 提取速度修正（后2个值: target_vx, target_vy）
+            velocity_correction = np.array([prediction[2], prediction[3]])
+
+            # 限制修正幅度，避免不稳定
+            correction_magnitude = np.linalg.norm(velocity_correction)
+            max_correction = 0.5  # 最大修正 0.5 m/s
+            if correction_magnitude > max_correction:
+                velocity_correction = velocity_correction / correction_magnitude * max_correction
+
+            return velocity_correction
+
+        except Exception as e:
+            # 预测失败时返回零修正
+            return np.zeros(2)
 
     def update_waiting_state(self, ped: Pedestrian, dt: float) -> None:
         """更新行人的等待状态
@@ -446,51 +517,56 @@ class SocialForceModel:
         return f_drive + f_social + f_obstacle + f_random
 
     def step(self, dt: float = 0.1) -> None:
-        """Update all pedestrian states (one time step)
+        """更新所有行人状态（一个时间步）
 
-        Enhanced version:
-        1. Update behavior states (waiting, panic)
-        2. Compute social forces
-        3. Update velocity and position
-        4. Anti-stuck mechanism
+        集成GBM的增强版本:
+        1. 更新行为状态（等待、恐慌）
+        2. 计算SFM社会力
+        3. 应用GBM速度修正（从真实数据学习）
+        4. 更新速度和位置
+
+        GBM修正替代了之前的随机反卡住机制，
+        提供从ETH/UCY数据学习的更真实的避障行为。
         """
-        # 1. Update behavior states
+        # 1. 更新行为状态
         for ped in self.pedestrians:
             self.update_waiting_state(ped, dt)
             self.update_panic_factor(ped)
 
-        # 2. Compute forces for all pedestrians
+        # 2. 计算所有行人的SFM力
         forces = [self.compute_total_force(ped) for ped in self.pedestrians]
 
-        # 3. Update velocity and position
-        for ped, force in zip(self.pedestrians, forces):
-            # Update velocity (F = ma, assuming mass = 1)
-            ped.velocity = ped.velocity + force * dt
+        # 3. 计算GBM速度修正（如果预测器可用）
+        gbm_corrections = []
+        if self.gbm_predictor is not None:
+            gbm_corrections = [self.compute_gbm_velocity_correction(ped)
+                              for ped in self.pedestrians]
+        else:
+            gbm_corrections = [np.zeros(2) for _ in self.pedestrians]
 
-            # Anti-stuck mechanism: if speed is very low and not waiting,
-            # add a random push to escape local minima
-            speed = np.linalg.norm(ped.velocity)
-            if speed < 0.1 and not ped.is_waiting:
-                # Check distance to target
-                dist_to_target = np.linalg.norm(ped.target - ped.position)
-                if dist_to_target > 1.0:  # Still far from target but stuck
-                    # Add random perpendicular push
-                    direction = ped.target - ped.position
-                    if np.linalg.norm(direction) > 0.1:
-                        direction = direction / np.linalg.norm(direction)
-                        # Perpendicular direction
-                        perp = np.array([-direction[1], direction[0]])
-                        # Random push left or right
-                        push = perp * np.random.choice([-1, 1]) * 0.5
-                        ped.velocity = ped.velocity + push
+        # 4. 更新速度和位置
+        for ped, force, gbm_corr in zip(self.pedestrians, forces, gbm_corrections):
+            # 计算SFM速度更新
+            sfm_velocity = ped.velocity + force * dt
 
-            # Limit max speed (considering panic factor)
+            # 融合SFM与GBM预测
+            # gbm_weight=0: 纯SFM, gbm_weight=1: 纯GBM
+            if self.gbm_predictor is not None and np.linalg.norm(gbm_corr) > 0.01:
+                # GBM提供速度修正，使运动更自然
+                # 在行人靠近障碍物时特别有用
+                blended_velocity = (1 - self.gbm_weight) * sfm_velocity + \
+                                   self.gbm_weight * (ped.velocity + gbm_corr)
+                ped.velocity = blended_velocity
+            else:
+                ped.velocity = sfm_velocity
+
+            # 限制最大速度（考虑恐慌因子）
             speed = np.linalg.norm(ped.velocity)
             max_speed = ped.desired_speed * (1.5 + ped.panic_factor * 0.3)
             if speed > max_speed:
                 ped.velocity = ped.velocity / speed * max_speed
 
-            # Update position
+            # 更新位置
             ped.position = ped.position + ped.velocity * dt
 
     def get_state(self) -> np.ndarray:

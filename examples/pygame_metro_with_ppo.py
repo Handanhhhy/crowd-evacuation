@@ -1,11 +1,13 @@
 """
 成都东客站地铁出站口疏散仿真 - 集成PPO智能引导
-社会力模型 + PPO强化学习动态优化出口选择
+社会力模型 + PPO强化学习 + GBM行为预测
 
 增强版本:
-- 支持多种行人类型可视化 (不同颜色)
-- 显示GBM行为预测器状态
-- 显示行人行为状态 (等待、恐慌)
+- 多种行人类型可视化（不同颜色）
+- GBM行为预测器状态显示
+- 行人行为状态显示（等待、恐慌）
+
+注意: Pygame显示使用英文避免字体编码问题
 """
 
 import sys
@@ -184,7 +186,7 @@ class MetroStationWithPPO:
             return False
 
     def load_gbm_predictor(self):
-        """加载GBM行为预测模型"""
+        """加载GBM行为预测器（基于ETH/UCY真实数据训练）"""
         gbm_model_path = project_root / "outputs" / "models" / "gbm_behavior.joblib"
 
         if gbm_model_path.exists():
@@ -193,16 +195,18 @@ class MetroStationWithPPO:
                 self.gbm_predictor = GBMPredictor()
                 self.gbm_predictor.load(str(gbm_model_path))
                 self.gbm_loaded = True
-                print(f"GBM行为预测模型已加载: {gbm_model_path}")
+                print(f"GBM Behavior Predictor loaded: {gbm_model_path}")
+                print("  (Trained on ETH/UCY real pedestrian trajectory data)")
                 return True
             except Exception as e:
-                print(f"加载GBM模型失败: {e}")
+                print(f"Failed to load GBM model: {e}")
                 self.gbm_predictor = None
                 self.gbm_loaded = False
                 return False
         else:
-            print("未找到GBM行为预测模型")
-            print("  提示: 运行 python examples/train_gbm_behavior.py 训练模型")
+            print("GBM Behavior Predictor not found")
+            print("  Hint: Run 'python examples/train_gbm_behavior.py' to train")
+            self.gbm_predictor = None
             self.gbm_loaded = False
             return False
 
@@ -216,24 +220,27 @@ class MetroStationWithPPO:
         """初始化社会力模型
 
         增强版本:
+        - 集成GBM行为预测（从ETH/UCY真实数据学习）
         - 支持等待、犹豫、恐慌等行为
-        - 支持多种行人类型
+        - 支持多种行人类型（老人、儿童、急躁型）
         """
-        # Create enhanced social force model
-        # Increased wall_A to prevent pedestrians getting stuck
+        # 创建集成GBM的增强版社会力模型
         self.model = SocialForceModel(
             tau=0.5,
             A=2000.0,
             B=0.08,
-            wall_A=5000.0,    # Increased from 2000 to prevent getting stuck
-            wall_B=0.1,       # Increased range for earlier obstacle detection
-            # Enhanced behavior parameters
+            wall_A=5000.0,    # 增强障碍物排斥力，防止卡住
+            wall_B=0.1,       # 增大检测范围，更早发现障碍物
+            # 增强行为参数
             enable_waiting=self.enable_enhanced_behaviors,
             enable_perturbation=self.enable_enhanced_behaviors,
             enable_panic=self.enable_enhanced_behaviors,
             waiting_density_threshold=0.8,
-            perturbation_sigma=0.1,
+            perturbation_sigma=0.05,  # 减小随机扰动，GBM处理行为
             panic_density_threshold=1.5,
+            # GBM行为预测器（基于ETH/UCY真实数据训练）
+            gbm_predictor=self.gbm_predictor,
+            gbm_weight=0.3,   # 融合权重: 30% GBM + 70% SFM
         )
 
         # 外墙
@@ -570,7 +577,7 @@ class MetroStationWithPPO:
         self.draw_info_panel(screen, font, font_small)
 
     def draw_info_panel(self, screen, font, font_small):
-        """Draw info panel (English version)"""
+        """绘制信息面板（使用英文显示避免编码问题）"""
         panel_x = int(self.scene_width * self.scale) + 70
         panel_y = 20
 
@@ -701,13 +708,13 @@ class MetroStationWithPPO:
         self.step_count += 1
 
     def run(self):
-        """Run visualization"""
+        """运行可视化"""
         pygame.init()
         screen = pygame.display.set_mode((self.window_width, self.window_height))
-        pygame.display.set_caption("Metro Evacuation - SFM + PPO Guidance")
+        pygame.display.set_caption("Metro Evacuation - SFM + PPO + GBM")
         clock = pygame.time.Clock()
 
-        # Use Arial font to avoid encoding issues
+        # 使用Arial字体避免中文编码问题
         font = pygame.font.SysFont('Arial', 18)
         font_small = pygame.font.SysFont('Arial', 14)
 

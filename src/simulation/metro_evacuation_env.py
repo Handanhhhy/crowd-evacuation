@@ -189,8 +189,11 @@ class MetroEvacuationEnv(gym.Env):
             enable_perturbation=self.enable_enhanced_behaviors,
             enable_panic=self.enable_enhanced_behaviors,
             waiting_density_threshold=0.8,
-            perturbation_sigma=0.1,
+            perturbation_sigma=0.05,  # Reduced since GBM handles behavior
             panic_density_threshold=1.5,
+            # GBM behavior predictor (trained on ETH/UCY real data)
+            gbm_predictor=self.gbm_predictor,
+            gbm_weight=0.3,   # 30% GBM, 70% SFM blend
         )
 
         # 外墙

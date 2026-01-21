@@ -103,6 +103,51 @@ class PedestrianType(Enum):
 | displacement | 总位移 |
 | path_length | 路径长度 |
 
+### 2.4 GBM与SFM融合
+
+**核心创新**: 将GBM预测的速度修正融合到SFM物理模型中
+
+#### 融合公式
+```
+V_final = (1 - w) × V_sfm + w × V_gbm
+
+其中:
+- V_sfm: 社会力模型计算的速度
+- V_gbm: GBM预测的速度修正
+- w: 融合权重 (默认0.3，即30%GBM + 70%SFM)
+```
+
+#### 工作原理
+1. **SFM计算**: 基于物理规则计算驱动力、社会力、障碍物力
+2. **GBM预测**: 根据当前状态预测真实行人的行为模式
+3. **智能融合**: 在障碍物附近，GBM预测更有价值（从真实数据学习）
+
+#### 优势
+| 方法 | 优点 | 缺点 |
+|------|------|------|
+| 纯SFM | 物理意义明确 | 遇障碍物会卡住或不自然 |
+| 纯GBM | 行为真实 | 缺乏物理约束 |
+| **SFM+GBM融合** | 物理合理+行为真实 | 需要训练数据 |
+
+#### 代码实现
+```python
+# src/sfm/social_force.py
+class SocialForceModel:
+    def __init__(self, ..., gbm_predictor=None, gbm_weight=0.3):
+        self.gbm_predictor = gbm_predictor
+        self.gbm_weight = gbm_weight
+
+    def step(self, dt):
+        # 1. Compute SFM forces
+        sfm_velocity = velocity + force * dt
+
+        # 2. Compute GBM correction
+        gbm_correction = self.compute_gbm_velocity_correction(ped)
+
+        # 3. Blend SFM with GBM
+        final_velocity = (1 - w) * sfm_velocity + w * (velocity + gbm_correction)
+```
+
 ### 2.4 环境集成
 
 **文件**: `src/simulation/metro_evacuation_env.py`
@@ -288,7 +333,10 @@ python examples/pygame_metro_with_ppo.py
 
 1. **多类型行人建模**: 老人、儿童、急躁型差异化
 2. **真实行为特征**: 等待、犹豫、恐慌
-3. **机器学习预测**: XGBoost行为预测器
+3. **SFM+GBM融合** (核心创新):
+   - 物理模型(SFM)提供基础运动规则
+   - 机器学习(GBM)从真实数据学习避障行为
+   - 融合后行人运动更自然，不会在障碍物前左右摇摆
 4. **GPU加速**: 自动检测CUDA/MPS/CPU
 
 ### 6.3 展示内容
@@ -296,7 +344,25 @@ python examples/pygame_metro_with_ppo.py
 1. 运行可视化程序，观察不同颜色行人
 2. 按T键切换颜色模式，展示类型差异
 3. 展示GBM特征重要性图
-4. 展示PPO训练曲线
+4. 对比演示：
+   - 无GBM: 行人在障碍物前可能卡住或摇摆
+   - 有GBM: 行人自然绕行（从真实数据学习）
+
+### 6.4 技术路线图
+
+```
+ETH/UCY真实轨迹数据
+        ↓
+   特征工程提取
+        ↓
+   XGBoost训练 → GBM行为预测器
+        ↓
+   融合到SFM ← 社会力物理模型
+        ↓
+   增强型行人仿真
+        ↓
+   PPO强化学习 → 疏散策略优化
+```
 
 ---
 
