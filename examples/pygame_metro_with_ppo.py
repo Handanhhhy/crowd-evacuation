@@ -1,11 +1,12 @@
 """
 成都东客站地铁出站口疏散仿真 - 集成PPO智能引导
-社会力模型 + PPO强化学习 + GBM行为预测
+社会力模型 + PPO强化学习 + GBM行为预测 + Social-LSTM轨迹预测
 
 增强版本:
 - 多种行人类型可视化（不同颜色）
 - GBM行为预测器状态显示
 - 行人行为状态显示（等待、恐慌）
+- Social-LSTM神经网络轨迹预测可视化
 
 注意: Pygame显示使用英文避免字体编码问题
 """
@@ -26,6 +27,13 @@ from sfm.social_force import (
     PEDESTRIAN_TYPE_PARAMS
 )
 
+# 尝试导入轨迹预测器
+try:
+    from ml.trajectory_predictor import TrajectoryPredictor
+    TRAJECTORY_PREDICTOR_AVAILABLE = True
+except ImportError:
+    TRAJECTORY_PREDICTOR_AVAILABLE = False
+
 
 # 颜色定义
 WHITE = (255, 255, 255)
@@ -40,9 +48,13 @@ LIGHT_GREEN = (144, 238, 144)
 DARK_BLUE = (25, 25, 112)
 YELLOW = (255, 215, 0)
 PURPLE = (147, 112, 219)
+CYAN = (0, 255, 255)
+PINK = (255, 182, 193)
 BG_COLOR = (240, 240, 235)
 FLOOR_COLOR = (220, 220, 210)
 GATE_COLOR = (100, 100, 100)
+PREDICTION_COLOR = (100, 200, 255)  # 预测轨迹颜色
+CORNER_TRAP_COLOR = (255, 100, 100)  # 角落陷阱颜色
 
 # 行人类型颜色映射 (基于文献参数配置)
 PEDESTRIAN_TYPE_COLORS = {
@@ -64,7 +76,9 @@ class MetroStationWithPPO:
         use_ppo: bool = True,
         enable_enhanced_behaviors: bool = True,
         show_type_colors: bool = True,
-        type_distribution: dict = None
+        type_distribution: dict = None,
+        show_predictions: bool = True,
+        enable_neural_prediction: bool = True
     ):
         """
         Args:
@@ -75,6 +89,8 @@ class MetroStationWithPPO:
             enable_enhanced_behaviors: 是否启用增强行为 (等待、犹豫、恐慌)
             show_type_colors: 是否按类型显示颜色 (否则按速度显示)
             type_distribution: 行人类型分布比例
+            show_predictions: 是否显示预测轨迹
+            enable_neural_prediction: 是否启用神经网络轨迹预测
         """
         self.n_pedestrians = n_pedestrians
         self.scale = scale
@@ -82,6 +98,8 @@ class MetroStationWithPPO:
         self.use_ppo = use_ppo
         self.enable_enhanced_behaviors = enable_enhanced_behaviors
         self.show_type_colors = show_type_colors
+        self.show_predictions = show_predictions
+        self.enable_neural_prediction = enable_neural_prediction
 
         # 行人类型分布 (默认: 70%普通 + 15%老人 + 10%儿童 + 5%急躁)
         self.type_distribution = type_distribution or {
@@ -138,6 +156,20 @@ class MetroStationWithPPO:
         # GBM行为预测模型
         self.gbm_predictor = None
         self.gbm_loaded = False
+
+        # Social-LSTM轨迹预测模型
+        self.trajectory_predictor = None
+        self.trajectory_loaded = False
+        self.predicted_trajectories = {}  # {ped_id: (pred_len, 2)}
+        self.corner_avoided_count = 0
+
+        # 角落陷阱位置
+        self.corner_traps = [
+            np.array([60, 40]),   # Exit C 上方右角落
+            np.array([60, 0]),    # 右下角落
+            np.array([55, 16]),   # 楼梯旁边
+            np.array([55, 24]),   # 楼梯旁边
+        ]
 
         # 状态
         self.model = None
@@ -208,6 +240,38 @@ class MetroStationWithPPO:
             print("  Hint: Run 'python examples/train_gbm_behavior.py' to train")
             self.gbm_predictor = None
             self.gbm_loaded = False
+            return False
+
+    def load_trajectory_predictor(self):
+        """加载Social-LSTM轨迹预测器"""
+        if not TRAJECTORY_PREDICTOR_AVAILABLE:
+            print("Trajectory Predictor module not available")
+            return False
+
+        if not self.enable_neural_prediction:
+            print("Neural trajectory prediction disabled")
+            return False
+
+        lstm_model_path = project_root / "outputs" / "models" / "social_lstm.pt"
+
+        try:
+            self.trajectory_predictor = TrajectoryPredictor(
+                model_path=str(lstm_model_path) if lstm_model_path.exists() else None,
+                obs_len=8,
+                pred_len=12,
+                device='cpu'
+            )
+            self.trajectory_loaded = True
+            if lstm_model_path.exists():
+                print(f"Social-LSTM Trajectory Predictor loaded: {lstm_model_path}")
+            else:
+                print("Social-LSTM model not found, using linear extrapolation")
+                print("  Hint: Run 'python examples/train_trajectory.py' to train")
+            return True
+        except Exception as e:
+            print(f"Failed to load Trajectory Predictor: {e}")
+            self.trajectory_predictor = None
+            self.trajectory_loaded = False
             return False
 
     def world_to_screen(self, pos):
@@ -380,10 +444,11 @@ class MetroStationWithPPO:
         return density, congestion
 
     def apply_ppo_guidance(self):
-        """应用PPO引导策略
+        """应用PPO引导策略（增强版：考虑拥堵情况）
 
         - 地铁站模型: action 0=A, 1=B, 2=C (直接映射)
         - 旧版模型: action 0=A, 1=B (需要额外逻辑处理出口C)
+        - 增强: 如果推荐出口太拥堵，自动选择替代出口
         """
         if self.ppo_model is None:
             return
@@ -407,6 +472,20 @@ class MetroStationWithPPO:
             if congestion > 0.6:
                 recommended_exit = 2  # 拥堵时引导去出口C
 
+        # 增强：检查推荐出口的拥堵情况，如果太拥堵则选择最不拥堵的出口
+        _, rec_congestion = self._compute_exit_metrics(self.exits[recommended_exit]['position'])
+        if rec_congestion > 0.5:
+            # 找到最不拥堵的出口
+            best_exit = recommended_exit
+            min_congestion = rec_congestion
+            for i, exit_info in enumerate(self.exits):
+                _, cong = self._compute_exit_metrics(exit_info['position'])
+                if cong < min_congestion:
+                    min_congestion = cong
+                    best_exit = i
+            recommended_exit = best_exit
+            self.current_action = best_exit  # 更新显示
+
         # 引导部分行人改变目标
         target_pos = self.exits[recommended_exit]['position']
 
@@ -419,14 +498,16 @@ class MetroStationWithPPO:
 
                 # 如果推荐出口更近或差距不大，更有可能响应
                 if dist_to_recommended < dist_to_current * 1.3:
-                    prob = 0.2  # 20%的概率响应引导
+                    prob = 0.15  # 降低基础响应概率，避免所有人去同一出口
                 else:
-                    prob = 0.08
+                    prob = 0.05
 
                 # 如果推荐出口不拥堵，提高响应概率
                 _, congestion = self._compute_exit_metrics(target_pos)
                 if congestion < 0.3:
-                    prob *= 1.5
+                    prob *= 2.0
+                elif congestion > 0.6:
+                    prob *= 0.3  # 拥堵时大幅降低响应概率
 
                 if np.random.random() < prob:
                     ped.target = target_pos.copy()
@@ -530,6 +611,35 @@ class MetroStationWithPPO:
         for start, end in walls:
             pygame.draw.line(screen, BLACK, self.world_to_screen(start), self.world_to_screen(end), 4)
 
+        # 绘制角落陷阱区域（警告区域）
+        for corner in self.corner_traps:
+            corner_screen = self.world_to_screen(corner)
+            trap_radius = int(3.0 * self.scale)
+            # 半透明红色圆圈
+            s = pygame.Surface((trap_radius * 2, trap_radius * 2), pygame.SRCALPHA)
+            pygame.draw.circle(s, (255, 100, 100, 50), (trap_radius, trap_radius), trap_radius)
+            screen.blit(s, (corner_screen[0] - trap_radius, corner_screen[1] - trap_radius))
+
+        # 绘制预测轨迹（如果启用）
+        if self.show_predictions and self.predicted_trajectories:
+            for ped_id, pred_traj in self.predicted_trajectories.items():
+                if len(pred_traj) < 2:
+                    continue
+
+                # 绘制预测轨迹线
+                points = []
+                for pos in pred_traj[::2]:  # 每隔一个点绘制，减少视觉混乱
+                    screen_pos = self.world_to_screen(pos)
+                    points.append(screen_pos)
+
+                if len(points) >= 2:
+                    # 使用半透明的线
+                    pygame.draw.lines(screen, PREDICTION_COLOR, False, points, 1)
+
+                    # 在轨迹终点绘制小圆点
+                    end_pos = self.world_to_screen(pred_traj[-1])
+                    pygame.draw.circle(screen, PREDICTION_COLOR, end_pos, 3)
+
         # 绘制行人
         for ped in self.model.pedestrians:
             screen_pos = self.world_to_screen(ped.position)
@@ -608,12 +718,29 @@ class MetroStationWithPPO:
             gbm_status = font_small.render("GBM Predictor: OFF", True, GRAY)
         screen.blit(gbm_status, (panel_x, panel_y + 65))
 
+        # Trajectory predictor status
+        if self.trajectory_loaded:
+            if self.trajectory_predictor and self.trajectory_predictor.use_neural_network:
+                traj_status = font_small.render("Social-LSTM: ON", True, CYAN)
+            else:
+                traj_status = font_small.render("Trajectory: Linear", True, YELLOW)
+        else:
+            traj_status = font_small.render("Trajectory: OFF", True, GRAY)
+        screen.blit(traj_status, (panel_x, panel_y + 85))
+
+        # Corner avoidance status
+        if self.corner_avoided_count > 0:
+            corner_status = font_small.render(f"Corner Avoided: {self.corner_avoided_count}", True, PINK)
+        else:
+            corner_status = font_small.render("Corner Avoided: 0", True, GRAY)
+        screen.blit(corner_status, (panel_x, panel_y + 105))
+
         # Enhanced behavior status
         if self.enable_enhanced_behaviors:
             behavior_status = font_small.render("Enhanced Behavior: ON", True, GREEN)
         else:
             behavior_status = font_small.render("Enhanced Behavior: OFF", True, GRAY)
-        screen.blit(behavior_status, (panel_x, panel_y + 85))
+        screen.blit(behavior_status, (panel_x, panel_y + 125))
 
         lines = [
             "",
@@ -637,16 +764,17 @@ class MetroStationWithPPO:
             "SPACE: Pause/Resume",
             "P: Toggle PPO",
             "T: Toggle color mode",
+            "V: Toggle predictions",
             "R: Restart",
             "ESC: Exit",
         ]
 
         for i, line in enumerate(lines):
             text = font_small.render(line, True, BLACK)
-            screen.blit(text, (panel_x, panel_y + 105 + i * 16))
+            screen.blit(text, (panel_x, panel_y + 145 + i * 16))
 
         # Legend
-        legend_y = panel_y + 105 + len(lines) * 16 + 10
+        legend_y = panel_y + 145 + len(lines) * 16 + 10
 
         legend_title = font_small.render("== Legend ==", True, BLACK)
         screen.blit(legend_title, (panel_x, legend_y))
@@ -660,6 +788,7 @@ class MetroStationWithPPO:
                 (PEDESTRIAN_TYPE_COLORS[PedestrianType.CHILD], "Child"),
                 (PEDESTRIAN_TYPE_COLORS[PedestrianType.IMPATIENT], "Impatient"),
                 (PURPLE, "PPO Recommended"),
+                (PREDICTION_COLOR, "Pred. Trajectory"),
             ]
         else:
             # Speed color legend
@@ -668,6 +797,7 @@ class MetroStationWithPPO:
                 (ORANGE, "Slow"),
                 (RED, "Congested"),
                 (PURPLE, "PPO Recommended"),
+                (PREDICTION_COLOR, "Pred. Trajectory"),
             ]
 
         for i, (color, label) in enumerate(legends):
@@ -675,10 +805,128 @@ class MetroStationWithPPO:
             text = font_small.render(label, True, BLACK)
             screen.blit(text, (panel_x + 25, legend_y + i * 18))
 
+    def predict_and_rebalance(self):
+        """预测性疏通系统：
+        1. 使用神经网络预测轨迹
+        2. 检测角落陷阱并重定向
+        3. 将过载出口的行人重分配到其他出口
+        """
+        if len(self.model.pedestrians) < 5:
+            return 0
+
+        redirect_count = 0
+        self.corner_avoided_count = 0
+
+        # 1. 更新轨迹预测
+        if self.trajectory_predictor is not None:
+            # 更新历史
+            for ped in self.model.pedestrians:
+                self.trajectory_predictor.update_history(ped.id, ped.position)
+
+            # 批量预测
+            self.predicted_trajectories = self.trajectory_predictor.predict_all_trajectories(
+                self.model.pedestrians,
+                scene_bounds=(0, 0, self.scene_width, self.scene_height)
+            )
+
+            # 2. 角落陷阱检测和避免
+            for ped in self.model.pedestrians:
+                if ped.id not in self.predicted_trajectories:
+                    continue
+
+                pred_traj = self.predicted_trajectories[ped.id]
+                is_trapped, trap_corner = self.trajectory_predictor.detect_corner_trap(
+                    pred_traj, self.corner_traps, trap_radius=3.0
+                )
+
+                if is_trapped:
+                    # 重定向到远离陷阱的出口
+                    best_exit = None
+                    best_score = float('-inf')
+
+                    for exit_info in self.exits:
+                        exit_pos = exit_info['position']
+                        dist_to_trap = np.linalg.norm(exit_pos - trap_corner)
+                        dist_to_ped = np.linalg.norm(exit_pos - ped.position)
+
+                        # 分数：远离陷阱 + 不太远
+                        score = dist_to_trap - dist_to_ped * 0.3
+
+                        if score > best_score:
+                            best_score = score
+                            best_exit = exit_info
+
+                    if best_exit is not None:
+                        ped.target = best_exit['position'].copy()
+                        self.corner_avoided_count += 1
+                        redirect_count += 1
+
+        # 3. 出口负载均衡
+        threshold = 8  # 单出口人数阈值
+
+        # 统计每个出口附近的行人数量
+        exit_counts = {}
+        exit_peds = {}
+        for exit_info in self.exits:
+            exit_name = exit_info['name']
+            exit_pos = exit_info['position']
+            exit_counts[exit_name] = 0
+            exit_peds[exit_name] = []
+
+            for ped in self.model.pedestrians:
+                dist_to_exit = np.linalg.norm(ped.target - exit_pos)
+                if dist_to_exit < 1.0:
+                    exit_counts[exit_name] += 1
+                    current_dist = np.linalg.norm(ped.position - exit_pos)
+                    if current_dist > 6.0:
+                        exit_peds[exit_name].append(ped)
+
+        # 重分配过载出口的行人
+        for exit_info in self.exits:
+            exit_name = exit_info['name']
+            if exit_counts[exit_name] <= threshold:
+                continue
+
+            excess = exit_counts[exit_name] - threshold
+            candidates = exit_peds[exit_name]
+
+            if not candidates:
+                continue
+
+            alternatives = [e for e in self.exits
+                          if exit_counts[e['name']] < threshold]
+
+            if not alternatives:
+                continue
+
+            redirected = 0
+            for ped in candidates:
+                if redirected >= excess:
+                    break
+
+                best_alt = None
+                best_dist = float('inf')
+                for alt in alternatives:
+                    dist = np.linalg.norm(ped.position - alt['position'])
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_alt = alt
+
+                if best_alt and best_dist < 50:
+                    ped.target = best_alt['position'].copy()
+                    redirected += 1
+                    redirect_count += 1
+
+        return redirect_count
+
     def update(self):
         """更新模拟"""
         if self.paused:
             return
+
+        # 预测性拥堵避免（每5步执行一次）
+        if self.step_count % 5 == 0:
+            self.predict_and_rebalance()
 
         # PPO引导（每隔一定步数更新）
         if self.ppo_model is not None and self.use_ppo:
@@ -704,6 +952,12 @@ class MetroStationWithPPO:
             self.evacuated_by_exit[exit_name] += 1
             # 按类型统计
             self.evacuated_by_type[ped.ped_type] += 1
+            # 清理轨迹预测历史
+            if self.trajectory_predictor is not None:
+                self.trajectory_predictor.remove_pedestrian(ped.id)
+            # 清理预测缓存
+            if ped.id in self.predicted_trajectories:
+                del self.predicted_trajectories[ped.id]
 
         self.step_count += 1
 
@@ -718,9 +972,10 @@ class MetroStationWithPPO:
         font = pygame.font.SysFont('Arial', 18)
         font_small = pygame.font.SysFont('Arial', 14)
 
-        # Load PPO model and GBM model
+        # Load PPO model, GBM model, and Trajectory predictor
         self.load_ppo_model()
         self.load_gbm_predictor()
+        self.load_trajectory_predictor()
         self.setup_model()
 
         while self.running:
@@ -744,6 +999,10 @@ class MetroStationWithPPO:
                         self.show_type_colors = not self.show_type_colors
                         mode = "by Type" if self.show_type_colors else "by Speed"
                         print(f"Color Mode: {mode}")
+                    elif event.key == pygame.K_v:
+                        # Toggle prediction visualization
+                        self.show_predictions = not self.show_predictions
+                        print(f"Show Predictions: {'ON' if self.show_predictions else 'OFF'}")
 
             self.update()
             self.draw_scene(screen, font, font_small)
@@ -769,23 +1028,27 @@ class MetroStationWithPPO:
 
 def main():
     print("=" * 60)
-    print("Metro Station Evacuation Simulation - Enhanced")
-    print("Social Force Model + PPO Guidance + Pedestrian Types")
+    print("Metro Station Evacuation Simulation - Neural Network Enhanced")
+    print("SFM + PPO + GBM + Social-LSTM Trajectory Prediction")
     print("=" * 60)
     print("\nModels:")
     print("  - Social Force Model (SFM): Pedestrian dynamics (Helbing 1995)")
     print("  - PPO Reinforcement Learning: Dynamic exit guidance")
     print("  - GBM Behavior Predictor: Based on ETH/UCY dataset")
+    print("  - Social-LSTM: Neural network trajectory prediction (Alahi 2016)")
     print("  - Pedestrian Types: Normal(70%), Elderly(15%), Child(10%), Impatient(5%)")
     print("  - Enhanced Behaviors: Waiting, Hesitation, Panic")
+    print("  - Predictive Evacuation: Corner trap detection & avoidance")
     print("\nLiterature:")
     print("  - Helbing 1995: Desired speed 1.34 m/s")
     print("  - Weidmann 1993: Elderly speed 0.9 m/s")
     print("  - Fruin 1971: Child speed 0.7 m/s")
+    print("  - Alahi 2016: Social LSTM for trajectory prediction")
     print("\nControls:")
     print("  SPACE - Pause/Resume")
     print("  P     - Toggle PPO guidance")
     print("  T     - Toggle color mode (by type/by speed)")
+    print("  V     - Toggle trajectory prediction visualization")
     print("  R     - Restart")
     print("  ESC   - Exit")
     print()
@@ -797,6 +1060,8 @@ def main():
         use_ppo=True,
         enable_enhanced_behaviors=True,
         show_type_colors=True,
+        show_predictions=True,
+        enable_neural_prediction=True,
         type_distribution={
             PedestrianType.NORMAL: 0.70,
             PedestrianType.ELDERLY: 0.15,

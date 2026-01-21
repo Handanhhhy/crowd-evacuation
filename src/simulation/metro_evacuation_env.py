@@ -6,6 +6,7 @@
 - 支持多种行人类型 (老人、儿童、急躁型等)
 - 可选GBM行为预测修正
 - 更真实的行人行为 (等待、犹豫、恐慌)
+- Social-LSTM神经网络轨迹预测 (预测性疏通系统)
 """
 
 import numpy as np
@@ -25,6 +26,14 @@ from sfm.social_force import (
     PedestrianType,
     PEDESTRIAN_TYPE_PARAMS
 )
+
+# 尝试导入轨迹预测器
+try:
+    from ml.trajectory_predictor import TrajectoryPredictor
+    TRAJECTORY_PREDICTOR_AVAILABLE = True
+except ImportError:
+    TRAJECTORY_PREDICTOR_AVAILABLE = False
+    print("警告: 轨迹预测器不可用，使用线性外推")
 
 
 @dataclass
@@ -68,6 +77,9 @@ class MetroEvacuationEnv(gym.Env):
         type_distribution: Optional[Dict[PedestrianType, float]] = None,
         enable_enhanced_behaviors: bool = True,
         gbm_model_path: Optional[str] = None,
+        # 神经网络轨迹预测参数
+        trajectory_model_path: Optional[str] = None,
+        enable_neural_prediction: bool = True,
     ):
         """
         Args:
@@ -80,6 +92,8 @@ class MetroEvacuationEnv(gym.Env):
                 默认: 70%普通 + 15%老人 + 10%儿童 + 5%急躁
             enable_enhanced_behaviors: 是否启用增强行为 (等待、犹豫、恐慌)
             gbm_model_path: GBM行为预测模型路径 (可选)
+            trajectory_model_path: Social-LSTM轨迹预测模型路径 (可选)
+            enable_neural_prediction: 是否启用神经网络轨迹预测
         """
         super().__init__()
 
@@ -105,6 +119,23 @@ class MetroEvacuationEnv(gym.Env):
         self.gbm_model_path = gbm_model_path
         if gbm_model_path:
             self._load_gbm_predictor(gbm_model_path)
+
+        # 神经网络轨迹预测器 (Social-LSTM)
+        self.trajectory_predictor = None
+        self.enable_neural_prediction = enable_neural_prediction
+        self.trajectory_model_path = trajectory_model_path
+        if enable_neural_prediction and TRAJECTORY_PREDICTOR_AVAILABLE:
+            self._load_trajectory_predictor(trajectory_model_path)
+
+        # 角落陷阱位置 (容易卡住的地方)
+        self.corner_traps = [
+            np.array([60, 40]),   # Exit C 上方右角落
+            np.array([60, 0]),    # 右下角落
+            np.array([0, 40]),    # 左上角落
+            np.array([0, 0]),     # 左下角落
+            np.array([55, 16]),   # 楼梯旁边
+            np.array([55, 24]),   # 楼梯旁边
+        ]
 
         # 定义3个出口
         self.exits = [
@@ -171,6 +202,36 @@ class MetroEvacuationEnv(gym.Env):
         except Exception as e:
             print(f"GBM模型加载失败: {e}")
             self.gbm_predictor = None
+            return False
+
+    def _load_trajectory_predictor(self, model_path: Optional[str] = None) -> bool:
+        """加载Social-LSTM轨迹预测模型
+
+        Args:
+            model_path: 模型文件路径 (None则使用线性外推)
+
+        Returns:
+            是否加载成功
+        """
+        if not TRAJECTORY_PREDICTOR_AVAILABLE:
+            print("轨迹预测器模块不可用")
+            return False
+
+        # 注意：不自动加载神经网络模型，使用线性外推作为默认
+        # 这避免了某些系统上的PyTorch兼容性问题
+        # 如果需要神经网络预测，请显式传入model_path
+        try:
+            self.trajectory_predictor = TrajectoryPredictor(
+                model_path=model_path,  # 保持为None以使用线性外推
+                obs_len=8,
+                pred_len=12,
+                device='cpu'
+            )
+            print(f"轨迹预测器已加载 (模式: {'神经网络' if self.trajectory_predictor.use_neural_network else '线性外推'})")
+            return True
+        except Exception as e:
+            print(f"轨迹预测器加载失败: {e}")
+            self.trajectory_predictor = None
             return False
 
     def _create_sfm(self) -> SocialForceModel:
@@ -364,6 +425,317 @@ class MetroEvacuationEnv(gym.Env):
 
         return density, congestion
 
+    # ========== 预测性疏通系统 (Neural Network Enhanced) ==========
+
+    def predict_future_positions(
+        self,
+        t_horizon: float = 5.0
+    ) -> Dict[int, np.ndarray]:
+        """预测所有行人t_horizon秒后的位置
+
+        优先使用Social-LSTM神经网络预测，回退到线性外推
+
+        Args:
+            t_horizon: 预测时间范围（秒）
+
+        Returns:
+            字典 {行人ID: 预测位置}
+        """
+        future_positions = {}
+
+        # 如果有神经网络预测器，使用完整轨迹预测
+        if self.trajectory_predictor is not None:
+            predictions = self.predict_future_positions_neural()
+            # 取预测轨迹的最后一个点作为t_horizon后的位置
+            for ped_id, traj in predictions.items():
+                if len(traj) > 0:
+                    future_positions[ped_id] = traj[-1]
+            return future_positions
+
+        # 回退到线性外推
+        for ped in self.sfm.pedestrians:
+            speed = np.linalg.norm(ped.velocity)
+
+            if speed > 0.1:
+                future_pos = ped.position + ped.velocity * t_horizon
+            else:
+                direction = ped.target - ped.position
+                dist = np.linalg.norm(direction)
+                if dist > 0.1:
+                    future_pos = ped.position + (direction / dist) * ped.desired_speed * t_horizon
+                else:
+                    future_pos = ped.position.copy()
+
+            # 限制在场景边界内
+            future_pos[0] = np.clip(future_pos[0], 0, self.scene_width)
+            future_pos[1] = np.clip(future_pos[1], 0, self.scene_height)
+
+            future_positions[ped.id] = future_pos
+
+        return future_positions
+
+    def predict_future_positions_neural(self) -> Dict[int, np.ndarray]:
+        """使用神经网络预测未来轨迹
+
+        使用Social-LSTM模型预测每个行人未来12帧的轨迹
+
+        Returns:
+            字典 {行人ID: (12, 2) 预测轨迹}
+        """
+        if self.trajectory_predictor is None:
+            return {}
+
+        # 更新历史缓冲区
+        for ped in self.sfm.pedestrians:
+            self.trajectory_predictor.update_history(ped.id, ped.position)
+
+        # 批量预测
+        predictions = self.trajectory_predictor.predict_all_trajectories(
+            self.sfm.pedestrians,
+            scene_bounds=(0, 0, self.scene_width, self.scene_height)
+        )
+
+        return predictions
+
+    def detect_corner_trap(
+        self,
+        ped_id: int,
+        pred_trajectory: np.ndarray
+    ) -> Tuple[bool, Optional[np.ndarray]]:
+        """检测行人是否正在走向死角
+
+        Args:
+            ped_id: 行人ID
+            pred_trajectory: 预测轨迹 (pred_len, 2)
+
+        Returns:
+            is_trapped: 是否将陷入角落
+            trap_corner: 陷阱角落位置
+        """
+        if self.trajectory_predictor is not None:
+            return self.trajectory_predictor.detect_corner_trap(
+                pred_trajectory,
+                self.corner_traps,
+                trap_radius=3.0
+            )
+
+        # 简单的角落检测 (回退方案)
+        for future_pos in pred_trajectory:
+            for corner in self.corner_traps:
+                if np.linalg.norm(future_pos - corner) < 3.0:
+                    return True, corner
+        return False, None
+
+    def proactive_corner_avoidance(self) -> int:
+        """主动角落避免: 检测并重定向将陷入角落的行人
+
+        Returns:
+            重定向的行人数量
+        """
+        if self.trajectory_predictor is None:
+            return 0
+
+        predictions = self.predict_future_positions_neural()
+        redirected_count = 0
+
+        for ped in self.sfm.pedestrians:
+            if ped.id not in predictions:
+                continue
+
+            pred_traj = predictions[ped.id]
+            is_trapped, trap_corner = self.detect_corner_trap(ped.id, pred_traj)
+
+            if is_trapped:
+                # 找到最近的非陷阱出口
+                current_dist = np.linalg.norm(ped.position - ped.target)
+                best_exit = None
+                best_dist = float('inf')
+
+                for exit_obj in self.exits:
+                    exit_pos = exit_obj.position
+                    # 检查这个出口是否远离陷阱
+                    dist_to_trap = np.linalg.norm(exit_pos - trap_corner)
+                    if dist_to_trap > 5.0:  # 出口距离陷阱足够远
+                        dist = np.linalg.norm(ped.position - exit_pos)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_exit = exit_obj
+
+                # 重定向到安全出口
+                if best_exit is not None:
+                    ped.target = best_exit.position.copy()
+                    redirected_count += 1
+
+        return redirected_count
+
+    def predict_exit_congestion(
+        self,
+        future_positions: Dict[int, np.ndarray],
+        detection_radius: float = 10.0
+    ) -> Dict[str, int]:
+        """预测每个出口的拥堵程度
+
+        统计预测位置在每个出口检测范围内的行人数量
+
+        Args:
+            future_positions: 预测的行人位置 {行人ID: 位置}
+            detection_radius: 出口检测半径
+
+        Returns:
+            字典 {出口名称: 预测人数}
+        """
+        exit_counts = {exit_obj.name: 0 for exit_obj in self.exits}
+
+        # 建立行人ID到行人对象的映射
+        ped_map = {ped.id: ped for ped in self.sfm.pedestrians}
+
+        for ped_id, future_pos in future_positions.items():
+            ped = ped_map.get(ped_id)
+            if ped is None:
+                continue
+
+            # 根据行人当前目标确定其去向的出口
+            min_dist = float('inf')
+            target_exit_name = None
+
+            for exit_obj in self.exits:
+                dist_to_exit = np.linalg.norm(ped.target - exit_obj.position)
+                if dist_to_exit < min_dist:
+                    min_dist = dist_to_exit
+                    target_exit_name = exit_obj.name
+
+            # 如果行人的预测位置在目标出口附近，计入该出口
+            if target_exit_name:
+                for exit_obj in self.exits:
+                    if exit_obj.name == target_exit_name:
+                        dist_to_exit = np.linalg.norm(future_pos - exit_obj.position)
+                        if dist_to_exit < detection_radius:
+                            exit_counts[target_exit_name] += 1
+                        break
+
+        return exit_counts
+
+    def _compute_redirect_cost(
+        self,
+        ped: 'Pedestrian',
+        current_exit: Exit,
+        new_exit: Exit
+    ) -> float:
+        """计算行人改道的成本
+
+        成本函数:
+        cost = distance_to_new_exit - distance_to_current_exit
+               + 0.5 * congestion_at_new_exit
+
+        Args:
+            ped: 行人对象
+            current_exit: 当前目标出口
+            new_exit: 新目标出口
+
+        Returns:
+            改道成本（越小越适合改道）
+        """
+        # 距离成本
+        dist_current = np.linalg.norm(ped.position - current_exit.position)
+        dist_new = np.linalg.norm(ped.position - new_exit.position)
+        distance_cost = dist_new - dist_current
+
+        # 拥堵成本
+        _, congestion_new = self._compute_exit_metrics(new_exit)
+        congestion_cost = 0.5 * congestion_new * 10  # 归一化
+
+        return distance_cost + congestion_cost
+
+    def rebalance_exit_assignments(
+        self,
+        threshold: int = 15,
+        t_horizon: float = 5.0
+    ) -> int:
+        """重新分配行人到出口，预防性避免拥堵
+
+        核心算法:
+        1. 预测每个出口未来的人数
+        2. 找出预测过载的出口
+        3. 选择改道成本最小的行人重新分配
+
+        Args:
+            threshold: 单出口人数阈值，超过则视为过载
+            t_horizon: 预测时间范围
+
+        Returns:
+            重新分配的行人数量
+        """
+        # 1. 预测未来位置
+        future_positions = self.predict_future_positions(t_horizon)
+
+        # 2. 预测每个出口的人数
+        exit_counts = self.predict_exit_congestion(future_positions)
+
+        # 3. 找出过载的出口
+        overloaded_exits = [
+            exit_obj for exit_obj in self.exits
+            if exit_counts[exit_obj.name] > threshold
+        ]
+
+        if not overloaded_exits:
+            return 0
+
+        redirect_count = 0
+        ped_map = {ped.id: ped for ped in self.sfm.pedestrians}
+
+        # 4. 对每个过载出口，重分配部分行人
+        for overloaded_exit in overloaded_exits:
+            excess = exit_counts[overloaded_exit.name] - threshold
+
+            # 找出目标是该出口的行人
+            candidates = []
+            for ped in self.sfm.pedestrians:
+                # 检查行人的目标是否是过载出口
+                dist_to_overloaded = np.linalg.norm(ped.target - overloaded_exit.position)
+                if dist_to_overloaded < 1.0:  # 目标是该出口
+                    # 只考虑还未太靠近出口的行人（有重定向空间）
+                    current_dist = np.linalg.norm(ped.position - overloaded_exit.position)
+                    if current_dist > 8.0:  # 距离出口还有一定距离
+                        candidates.append(ped)
+
+            if not candidates:
+                continue
+
+            # 找出可替代的出口（非过载）
+            alternative_exits = [
+                exit_obj for exit_obj in self.exits
+                if exit_obj.id != overloaded_exit.id and
+                exit_counts[exit_obj.name] < threshold
+            ]
+
+            if not alternative_exits:
+                continue
+
+            # 计算每个候选行人的改道成本
+            redirect_options = []
+            for ped in candidates:
+                for alt_exit in alternative_exits:
+                    cost = self._compute_redirect_cost(ped, overloaded_exit, alt_exit)
+                    redirect_options.append((ped, alt_exit, cost))
+
+            # 按成本排序，选择成本最小的行人改道
+            redirect_options.sort(key=lambda x: x[2])
+
+            # 重定向excess个行人（但不超过候选人数）
+            redirected_peds = set()
+            for ped, alt_exit, cost in redirect_options:
+                if len(redirected_peds) >= excess:
+                    break
+                if ped.id in redirected_peds:
+                    continue
+                # 只有成本不太高时才改道（避免绕太远的路）
+                if cost < 15.0:
+                    ped.target = alt_exit.position.copy()
+                    redirected_peds.add(ped.id)
+                    redirect_count += 1
+
+        return redirect_count
+
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """执行一步
 
@@ -373,6 +745,23 @@ class MetroEvacuationEnv(gym.Env):
         Returns:
             observation, reward, terminated, truncated, info
         """
+        # 预测性疏通系统：
+        # 1. 每5步执行一次预测重分配
+        # 2. 使用神经网络预测时，额外执行角落避免
+        redirected = 0
+        corner_avoided = 0
+
+        if self.current_step % 5 == 0 and len(self.sfm.pedestrians) > 5:
+            # 出口负载均衡
+            redirected = self.rebalance_exit_assignments(
+                threshold=8,    # 降低阈值，更积极地分流
+                t_horizon=3.0   # 预测3秒后的状态
+            )
+
+            # 主动角落避免 (神经网络增强)
+            if self.trajectory_predictor is not None:
+                corner_avoided = self.proactive_corner_avoidance()
+
         # 根据动作调整部分行人的目标出口
         self._apply_action(action)
 
@@ -401,6 +790,9 @@ class MetroEvacuationEnv(gym.Env):
             'evacuated_by_exit': self.evacuated_by_exit.copy(),
             'evacuated_by_type': {t.value: c for t, c in self.evacuated_by_type.items()},
             'enhanced_behaviors': self.enable_enhanced_behaviors,
+            'redirected_this_step': redirected,  # 本步重定向的行人数
+            'corner_avoided_this_step': corner_avoided,  # 本步角落避免的行人数
+            'neural_prediction': self.trajectory_predictor is not None,  # 是否使用神经网络预测
         }
 
         return obs, reward, terminated, truncated, info
@@ -433,7 +825,7 @@ class MetroEvacuationEnv(gym.Env):
     def _check_evacuated(self):
         """检查并移除已疏散的行人
 
-        增强版本: 同时统计按类型的疏散数量
+        增强版本: 同时统计按类型的疏散数量，并清理轨迹预测历史
         """
         evacuated = []
         for ped in self.sfm.pedestrians:
@@ -449,6 +841,9 @@ class MetroEvacuationEnv(gym.Env):
 
         for ped, _ in evacuated:
             self.sfm.pedestrians.remove(ped)
+            # 清理轨迹预测历史
+            if self.trajectory_predictor is not None:
+                self.trajectory_predictor.remove_pedestrian(ped.id)
 
         self.history['evacuated'].append(self.evacuated_count)
 

@@ -83,6 +83,8 @@ class Pedestrian:
     is_waiting: bool = False  # 是否在等待
     wait_timer: float = 0.0   # 等待计时器
     panic_factor: float = 0.0  # 恐慌因子 (0-1)
+    stuck_timer: float = 0.0  # 卡住计时器（用于反堵塞）
+    last_position: np.ndarray = field(default_factory=lambda: np.zeros(2))  # 上一位置
 
     @property
     def speed(self) -> float:
@@ -132,7 +134,9 @@ class Pedestrian:
             reaction_time=params['reaction_time'],
             is_waiting=False,
             wait_timer=0.0,
-            panic_factor=0.0
+            panic_factor=0.0,
+            stuck_timer=0.0,
+            last_position=position.copy()
         )
 
 
@@ -283,7 +287,7 @@ class SocialForceModel:
         return force
 
     def compute_obstacle_force(self, ped: Pedestrian) -> np.ndarray:
-        """计算障碍物排斥力"""
+        """计算障碍物排斥力（增强版）"""
         force = np.zeros(2)
 
         for obstacle in self.obstacles:
@@ -297,16 +301,26 @@ class SocialForceModel:
             distance = np.linalg.norm(diff)
 
             if distance < 1e-6:
+                # 如果几乎在障碍物上，给一个随机方向的强推力
+                random_dir = np.random.uniform(-1, 1, 2)
+                random_dir = random_dir / (np.linalg.norm(random_dir) + 1e-6)
+                force += random_dir * 5000
                 continue
 
             n = diff / distance
 
-            # 排斥力
+            # 排斥力（距离越近力越大）
             force += self.wall_A * np.exp((ped.radius - distance) / self.wall_B) * n
 
-            # 接触力
+            # 接触力 - 当行人接触或穿透障碍物时
             if distance < ped.radius:
                 force += self.k * (ped.radius - distance) * n
+
+            # 额外的近距离强推力 - 防止卡在障碍物边缘
+            if distance < ped.radius * 1.5:
+                # 增加额外的推力，距离越近越强
+                extra_force = 3000 * (1 - distance / (ped.radius * 1.5))
+                force += extra_force * n
 
         return force
 
@@ -473,10 +487,14 @@ class SocialForceModel:
             ped.is_waiting = False
             ped.wait_timer = 0.0
 
-        # 等待时间过长自动恢复 (最多等待5秒)
-        if ped.wait_timer > 5.0:
+        # 等待时间过长自动恢复 (最多等待1.5秒，减少死锁)
+        if ped.wait_timer > 1.5:
             ped.is_waiting = False
             ped.wait_timer = 0.0
+
+        # 如果行人卡住太久，强制取消等待状态
+        if hasattr(ped, 'stuck_timer') and ped.stuck_timer > 0.5:
+            ped.is_waiting = False
 
     def update_panic_factor(self, ped: Pedestrian) -> None:
         """更新行人的恐慌因子
@@ -566,8 +584,98 @@ class SocialForceModel:
             if speed > max_speed:
                 ped.velocity = ped.velocity / speed * max_speed
 
+            # ========== 增强版反堵塞机制 ==========
+            # 基于实际位移检测卡住，而不仅是速度
+            actual_movement = np.linalg.norm(ped.position - ped.last_position)
+            direction = ped.target - ped.position
+            dist_to_target = np.linalg.norm(direction)
+
+            # 检测是否卡住：移动很少且不是在等待且还没到达目标
+            is_stuck = actual_movement < 0.05 * dt and not ped.is_waiting and dist_to_target > 1.0
+
+            if is_stuck:
+                ped.stuck_timer += dt
+            else:
+                # 快速衰减卡住计时器
+                ped.stuck_timer = max(0, ped.stuck_timer - dt * 2)
+
+            # 根据卡住时间采取不同强度的脱困措施
+            if ped.stuck_timer > 0.2 and dist_to_target > 0.5:
+                # 计算脱困强度（卡住越久，力度越大）
+                stuck_level = min(ped.stuck_timer / 1.5, 1.0)  # 0-1，1.5秒达到最大
+
+                # 方案1：轻度卡住 (0.2-0.8秒) - 随机扰动
+                if ped.stuck_timer < 0.8:
+                    perturbation = np.random.uniform(-0.8, 0.8, 2)
+                    ped.velocity += perturbation * (1 + stuck_level)
+                    # 增加向目标的推力
+                    if dist_to_target > 0.1:
+                        ped.velocity += 0.5 * direction / dist_to_target
+
+                # 方案2：中度卡住 (0.8-1.5秒) - 横向逃逸
+                elif ped.stuck_timer < 1.5:
+                    if dist_to_target > 0.1:
+                        # 计算垂直于目标方向的逃逸方向
+                        escape_dir = np.array([-direction[1], direction[0]]) / dist_to_target
+                        # 随机选择左或右
+                        if np.random.random() > 0.5:
+                            escape_dir = -escape_dir
+                        ped.velocity += escape_dir * 1.2
+                        ped.velocity += 0.6 * direction / dist_to_target
+
+                # 方案3：严重卡住 (>1.5秒) - 强制推开 + 逃离人群
+                else:
+                    # 强力随机推动
+                    strong_push = np.random.uniform(-1.5, 1.5, 2)
+                    ped.velocity += strong_push
+
+                    # 向密度较低方向移动
+                    if dist_to_target > 0.1:
+                        # 检测周围行人，找到人少的方向
+                        away_from_crowd = np.zeros(2)
+                        for other in self.pedestrians:
+                            if other.id != ped.id:
+                                diff = ped.position - other.position
+                                dist_other = np.linalg.norm(diff)
+                                if 0.1 < dist_other < 3.0:
+                                    away_from_crowd += diff / (dist_other ** 2)
+
+                        if np.linalg.norm(away_from_crowd) > 0.1:
+                            away_from_crowd = away_from_crowd / np.linalg.norm(away_from_crowd)
+                            ped.velocity += away_from_crowd * 1.0
+
+                        # 仍然保持向目标的倾向
+                        ped.velocity += 0.8 * direction / dist_to_target
+
+            # 保存当前位置用于下次比较
+            ped.last_position = ped.position.copy()
+
             # 更新位置
-            ped.position = ped.position + ped.velocity * dt
+            new_position = ped.position + ped.velocity * dt
+
+            # 障碍物碰撞检测和修正
+            # 检查新位置是否会导致与障碍物碰撞
+            collision_resolved = False
+            for obstacle in self.obstacles:
+                start, end = obstacle[0], obstacle[1]
+                closest_point = self._closest_point_on_segment(new_position, start, end)
+                dist_to_obstacle = np.linalg.norm(new_position - closest_point)
+
+                if dist_to_obstacle < ped.radius * 0.8:
+                    # 碰撞！将行人推离障碍物
+                    if dist_to_obstacle > 1e-6:
+                        push_dir = (new_position - closest_point) / dist_to_obstacle
+                    else:
+                        push_dir = np.random.uniform(-1, 1, 2)
+                        push_dir = push_dir / (np.linalg.norm(push_dir) + 1e-6)
+
+                    # 将行人推到安全距离
+                    new_position = closest_point + push_dir * (ped.radius * 1.2)
+                    # 调整速度方向远离障碍物
+                    ped.velocity = ped.velocity - 2 * np.dot(ped.velocity, -push_dir) * (-push_dir)
+                    collision_resolved = True
+
+            ped.position = new_position
 
     def get_state(self) -> np.ndarray:
         """获取所有行人的状态矩阵
