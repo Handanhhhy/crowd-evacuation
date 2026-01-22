@@ -75,7 +75,13 @@ class MetroTrainingCallback(BaseCallback):
         return True
 
 
-def train_ppo_metro(n_envs: int = 8, ppo_device: str = "cpu", trajectory_device: str = "auto", total_timesteps: int = 500000):
+def train_ppo_metro(
+    n_envs: int = 8,
+    ppo_device: str = "cpu",
+    trajectory_device: str = "auto",
+    total_timesteps: int = 500000,
+    show_plots: bool = True,
+):
     """训练地铁站场景PPO模型"""
 
     print("=" * 60)
@@ -183,12 +189,12 @@ def train_ppo_metro(n_envs: int = 8, ppo_device: str = "cpu", trajectory_device:
     print(f"模型已保存: {model_path}.zip")
 
     # 评估和可视化
-    evaluate_and_visualize(model, env, callback, project_root)
+    evaluate_and_visualize(model, env, callback, project_root, show_plots=show_plots)
 
     return model
 
 
-def evaluate_and_visualize(model, env, callback, project_root):
+def evaluate_and_visualize(model, env, callback, project_root, show_plots: bool = True):
     """评估模型并可视化结果"""
 
     print("\n" + "=" * 60)
@@ -237,6 +243,8 @@ def evaluate_and_visualize(model, env, callback, project_root):
     print(f"  平均出口分布: A={avg_A:.1f}, B={avg_B:.1f}, C={avg_C:.1f}")
 
     # 可视化
+    if not show_plots and platform.system() == "Windows":
+        plt.switch_backend("Agg")
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
     # 1. 训练过程中的疏散人数
@@ -305,7 +313,10 @@ def evaluate_and_visualize(model, env, callback, project_root):
     plt.savefig(str(fig_path), dpi=150)
     print(f"\n训练结果图已保存: {fig_path}")
 
-    plt.show()
+    if show_plots:
+        plt.show()
+    else:
+        plt.close(fig)
 
 
 def demo_trained_model():
@@ -353,6 +364,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="训练地铁站场景PPO模型")
     parser.add_argument("--demo", action="store_true", help="演示训练好的模型")
+    parser.add_argument("--no-show", action="store_true",
+                        help="保存图像但不显示 (无GUI环境使用)")
     parser.add_argument("--ppo-device", default="cpu",
                         choices=["cpu", "cuda", "mps", "auto"],
                         help="PPO 训练设备")
@@ -373,4 +386,5 @@ if __name__ == "__main__":
             ppo_device=args.ppo_device,
             trajectory_device=args.trajectory_device,
             total_timesteps=args.total_timesteps,
+            show_plots=not args.no_show,
         )
