@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-01-22T17:56:29.748159",
+  "config": {
+    "n_pedestrians": 60,
+    "max_steps": 250,
+    "total_timesteps": 30000,
+    "n_steps": 512,
+    "batch_size": 64,
+    "n_eval_episodes": 5
+  },
+  "results": {
+    "ppo_evac_rate": 99.66666666666667,
+    "random_evac_rate": 97.66666666666666,
+    "improvement": 2.000000000000014,
+    "ppo_steps": 192.0,
+    "random_steps": 233.8,
+    "train_time_sec": 1400.9199330806732,
+    "total_time_sec": 1488.519520998001
+  },
+  "conclusion": "MARGINAL"
+}

@@ -117,7 +117,9 @@ def train_ppo_metro(n_envs: int = 8, ppo_device: str = "cpu", trajectory_device:
     if trajectory_device == "auto":
         trajectory_device = get_trajectory_device()
     if ppo_device == "auto":
-        ppo_device = get_trajectory_device()
+        # PPO使用MLP策略时，CPU通常比GPU更快
+        # GPU更适合CNN策略或大型网络
+        ppo_device = "cpu"
 
     # 创建单独的评估环境 (可启用神经网络预测)
     env = make_env(0, trajectory_device, enable_neural=False)()

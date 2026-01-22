@@ -24,7 +24,8 @@ global:
     gae_lambda: 0.95
     clip_range: 0.2
     ent_coef: 0.01
-    device: "auto"               # 自动检测GPU (mps/cuda/cpu)
+    ppo_device: "cpu"            # PPO+MLP策略在CPU上更快
+    trajectory_device: "auto"    # 轨迹预测神经网络可用GPU (mps/cuda/cpu)
 
   # 评估配置
   evaluation:

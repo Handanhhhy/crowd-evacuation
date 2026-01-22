@@ -64,18 +64,26 @@ from utils.experiment_logger import (
 )
 
 
-def get_device() -> str:
-    """自动检测最佳计算设备"""
+def get_trajectory_device() -> str:
+    """自动检测轨迹预测的最佳设备（神经网络用GPU更快）"""
     if torch.cuda.is_available():
         device = "cuda"
-        print(f"使用 NVIDIA GPU: {torch.cuda.get_device_name(0)}")
+        print(f"轨迹预测使用 NVIDIA GPU: {torch.cuda.get_device_name(0)}")
     elif torch.backends.mps.is_available():
         device = "mps"
-        print("使用 Apple Silicon GPU (MPS)")
+        print("轨迹预测使用 Apple Silicon GPU (MPS)")
     else:
         device = "cpu"
-        print("使用 CPU")
+        print("轨迹预测使用 CPU")
     return device
+
+
+def get_ppo_device() -> str:
+    """PPO设备选择（MLP策略用CPU更快）"""
+    # PPO使用MlpPolicy时，CPU通常比GPU更快
+    # 因为小型MLP网络的GPU数据传输开销大于计算收益
+    print("PPO训练使用 CPU（MLP策略在CPU上更快）")
+    return "cpu"
 
 
 class ObservationWrapper(gym.ObservationWrapper):
@@ -288,6 +296,17 @@ def train_ppo_model(
     # 创建向量环境
     vec_env = DummyVecEnv([lambda: env])
 
+    # 自动检测GPU (支持CUDA和MPS)
+    if torch.cuda.is_available():
+        ppo_device = "cuda"
+        print(f"  PPO使用NVIDIA GPU: {torch.cuda.get_device_name(0)}")
+    elif torch.backends.mps.is_available():
+        ppo_device = "mps"
+        print("  PPO使用Apple Silicon GPU (MPS)")
+    else:
+        ppo_device = "cpu"
+        print("  PPO使用CPU")
+
     # 创建PPO模型
     model = PPO(
         "MlpPolicy",
@@ -301,7 +320,7 @@ def train_ppo_model(
         clip_range=train_config.get("clip_range", 0.2),
         ent_coef=train_config.get("ent_coef", 0.01),
         verbose=1,
-        device=device if device != "auto" else get_device()
+        device=ppo_device
     )
 
     # 训练回调

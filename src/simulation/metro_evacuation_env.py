@@ -27,6 +27,19 @@ from sfm.social_force import (
     PEDESTRIAN_TYPE_PARAMS
 )
 
+# GPU版社会力模型
+try:
+    from sfm.social_force_gpu import (
+        GPUSocialForceModel,
+        Pedestrian as GPUPedestrian,
+        PedestrianType as GPUPedestrianType,
+        PEDESTRIAN_TYPE_PARAMS as GPU_PEDESTRIAN_TYPE_PARAMS
+    )
+    GPU_SFM_AVAILABLE = True
+except ImportError:
+    GPU_SFM_AVAILABLE = False
+    print("警告: GPU版SFM不可用，将使用CPU版本")
+
 # 尝试导入轨迹预测器
 try:
     from ml.trajectory_predictor import TrajectoryPredictor
@@ -119,6 +132,9 @@ class MetroEvacuationEnv(gym.Env):
         enable_neural_prediction: bool = True,
         trajectory_device: Optional[str] = None,
         reward_weights: Optional[Dict[str, float]] = None,
+        # GPU加速SFM参数
+        use_gpu_sfm: bool = False,
+        sfm_device: str = "auto",
     ):
         """
         Args:
@@ -167,6 +183,12 @@ class MetroEvacuationEnv(gym.Env):
         self.trajectory_device = trajectory_device or "auto"
         if enable_neural_prediction and TRAJECTORY_PREDICTOR_AVAILABLE:
             self._load_trajectory_predictor(trajectory_model_path)
+
+        # GPU加速SFM配置
+        self.use_gpu_sfm = use_gpu_sfm and GPU_SFM_AVAILABLE
+        self.sfm_device = sfm_device
+        if use_gpu_sfm and not GPU_SFM_AVAILABLE:
+            print("警告: 请求使用GPU SFM但不可用，将使用CPU版本")
 
         self.reward_weights = {**REWARD_DEFAULTS, **(reward_weights or {})}
 
@@ -296,28 +318,32 @@ class MetroEvacuationEnv(gym.Env):
             self.trajectory_predictor = None
             return False
 
-    def _create_sfm(self) -> SocialForceModel:
+    def _create_sfm(self):
         """创建社会力模型实例（包含地铁站场景的障碍物）
 
         如果启用增强行为，将开启等待、犹豫、恐慌等特性
+        支持CPU和GPU(MPS/CUDA)两种模式
         """
-        sfm = SocialForceModel(
+        sfm_params = dict(
             tau=0.5,
             A=2000.0,
             B=0.08,
-            wall_A=5000.0,    # Increased to prevent pedestrians getting stuck
-            wall_B=0.1,       # Increased range for earlier obstacle detection
-            # Enhanced behavior parameters
+            wall_A=5000.0,
+            wall_B=0.1,
             enable_waiting=self.enable_enhanced_behaviors,
             enable_perturbation=self.enable_enhanced_behaviors,
             enable_panic=self.enable_enhanced_behaviors,
             waiting_density_threshold=0.8,
-            perturbation_sigma=0.05,  # Reduced since GBM handles behavior
+            perturbation_sigma=0.05,
             panic_density_threshold=1.5,
-            # GBM behavior predictor (trained on ETH/UCY real data)
             gbm_predictor=self.gbm_predictor,
-            gbm_weight=0.3,   # 30% GBM, 70% SFM blend
+            gbm_weight=0.3,
         )
+
+        if self.use_gpu_sfm:
+            sfm = GPUSocialForceModel(device=self.sfm_device, **sfm_params)
+        else:
+            sfm = SocialForceModel(**sfm_params)
 
         # 外墙
         # 上墙（有出口C的间隔）
