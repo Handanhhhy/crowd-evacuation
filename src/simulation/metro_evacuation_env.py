@@ -56,11 +56,16 @@ GUIDANCE_CONFIG = {
 
 
 REWARD_DEFAULTS = {
-    "evac_per_person": 10.0,
-    "congestion_penalty": 2.0,
-    "time_penalty": 0.1,
-    "completion_bonus": 100.0,
-    "balance_penalty": 0.5,
+    "evac_per_person": 12.0,          # 每人疏散奖励 (增加)
+    "congestion_penalty": 3.0,         # 拥堵惩罚 (增加)
+    "time_penalty": 0.2,               # 时间惩罚 (增加)
+    "completion_bonus": 200.0,         # 完成奖励 (增加)
+    "balance_penalty": 0.8,            # 均衡惩罚 (增加)
+    # 新增奖励项
+    "flow_efficiency_bonus": 1.5,      # 人流效率奖励
+    "safety_distance_bonus": 0.5,      # 安全间距奖励
+    "guidance_penalty": 0.3,           # 频繁引导惩罚
+    "evacuation_rate_bonus": 2.0,      # 疏散速率提升奖励
 }
 
 @dataclass
@@ -75,20 +80,25 @@ class Exit:
 class MetroEvacuationEnv(gym.Env):
     """成都东客站地铁出站口疏散环境
 
-    观测空间 (8维):
+    观测空间 (16维 - 增强版):
         - 3个出口的密度 (3)
         - 3个出口的拥堵度 (3)
+        - 3个出口的人流方向占比 (3) - 新增
+        - 3个历史疏散速率 (3) - 新增 (最近3步的疏散人数)
+        - 瓶颈点密度 (2) - 新增 (闸机区/柱子区)
         - 剩余人数比例 (1)
         - 时间比例 (1)
 
     动作空间: Discrete(3) - 选择推荐出口A/B/C
 
-    奖励函数:
-        - 疏散奖励: +10 × 新疏散人数
-        - 拥堵惩罚: -2 × 总拥堵度
-        - 时间惩罚: -0.1/步
-        - 完成奖励: +100
+    奖励函数 (增强版):
+        - 疏散奖励: +12 × 新疏散人数
+        - 拥堵惩罚: -3 × 总拥堵度
+        - 时间惩罚: -0.2/步
+        - 完成奖励: +200
         - 均衡奖励: 鼓励各出口分流
+        - 人流效率奖励: 鼓励高效疏散 (新增)
+        - 安全间距奖励: 避免过度拥挤 (新增)
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
@@ -194,11 +204,16 @@ class MetroEvacuationEnv(gym.Env):
             {'position': np.array([55.0, 20.0]), 'size': (4.0, 8.0)},
         ]
 
-        # 观测空间: [3个出口密度, 3个出口拥堵度, 剩余人数比例, 时间比例]
-        obs_dim = self.n_exits * 2 + 2  # 3*2 + 2 = 8
+        # 增强观测空间: 16维
+        # [3出口密度, 3出口拥堵度, 3人流方向占比, 3历史疏散速率, 2瓶颈密度, 剩余比例, 时间比例]
+        obs_dim = 16
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(obs_dim,), dtype=np.float32
         )
+
+        # 历史疏散速率缓冲区 (最近3步)
+        self.evacuation_rate_buffer = [0.0, 0.0, 0.0]
+        self.last_evacuated_count = 0
 
         # 动作空间: 选择推荐出口 (A/B/C)
         self.action_space = spaces.Discrete(self.n_exits)
@@ -418,6 +433,11 @@ class MetroEvacuationEnv(gym.Env):
         self.evacuated_by_type = {t: 0 for t in PedestrianType}
         self.last_action = 0  # 重置引导系统状态
 
+        # 重置增强观测相关状态
+        self.evacuation_rate_buffer = [0.0, 0.0, 0.0]
+        self.last_evacuated_count = 0
+        self.guidance_count_this_episode = 0
+
         self.history = {
             'evacuated': [],
             'congestion': [],
@@ -427,27 +447,94 @@ class MetroEvacuationEnv(gym.Env):
         return self._get_observation(), {}
 
     def _get_observation(self) -> np.ndarray:
-        """获取观测 (8维)"""
+        """获取增强观测 (16维)
+
+        观测向量构成:
+        [0-2]  3个出口密度
+        [3-5]  3个出口拥堵度
+        [6-8]  3个出口人流方向占比 (走向该出口的行人比例)
+        [9-11] 3个历史疏散速率 (最近3步疏散人数/总人数)
+        [12-13] 2个瓶颈点密度 (闸机区、柱子区)
+        [14]   剩余人数比例
+        [15]   时间比例
+        """
         exit_densities = []
         exit_congestions = []
+        exit_flow_ratios = []
+
+        total_peds = len(self.sfm.pedestrians)
 
         for exit_obj in self.exits:
             density, congestion = self._compute_exit_metrics(exit_obj)
             exit_densities.append(density)
             exit_congestions.append(congestion)
 
+            # 计算走向该出口的行人比例
+            flow_count = 0
+            for ped in self.sfm.pedestrians:
+                if np.linalg.norm(ped.target - exit_obj.position) < 2.0:
+                    flow_count += 1
+            flow_ratio = flow_count / max(total_peds, 1)
+            exit_flow_ratios.append(flow_ratio)
+
+        # 历史疏散速率 (归一化到0-1)
+        max_rate = self.n_pedestrians / 10.0  # 假设最大速率是每步疏散10%的人
+        evacuation_rates = [min(r / max_rate, 1.0) for r in self.evacuation_rate_buffer]
+
+        # 瓶颈点密度
+        bottleneck_densities = self._compute_bottleneck_densities()
+
         # 剩余人数比例
-        remaining_ratio = len(self.sfm.pedestrians) / max(self.n_pedestrians, 1)
+        remaining_ratio = total_peds / max(self.n_pedestrians, 1)
 
         # 时间比例
         time_ratio = self.current_step / self.max_steps
 
         obs = np.array(
-            exit_densities + exit_congestions + [remaining_ratio, time_ratio],
+            exit_densities +           # [0-2]
+            exit_congestions +         # [3-5]
+            exit_flow_ratios +         # [6-8]
+            evacuation_rates +         # [9-11]
+            bottleneck_densities +     # [12-13]
+            [remaining_ratio, time_ratio],  # [14-15]
             dtype=np.float32
         )
 
         return np.clip(obs, 0.0, 1.0)
+
+    def _compute_bottleneck_densities(self) -> List[float]:
+        """计算瓶颈点密度
+
+        瓶颈区域:
+        1. 闸机区 (x: 18-22, y: 7-33) - 主要拥堵点
+        2. 柱子区 (围绕6个柱子的区域) - 次要拥堵点
+
+        Returns:
+            [闸机区密度, 柱子区密度] (归一化到0-1)
+        """
+        gate_zone = {'x_min': 18, 'x_max': 22, 'y_min': 7, 'y_max': 33}
+        gate_count = 0
+        pillar_count = 0
+
+        for ped in self.sfm.pedestrians:
+            x, y = ped.position
+
+            # 检查是否在闸机区
+            if (gate_zone['x_min'] <= x <= gate_zone['x_max'] and
+                gate_zone['y_min'] <= y <= gate_zone['y_max']):
+                gate_count += 1
+
+            # 检查是否靠近任何柱子 (3米内)
+            for pillar in self.pillars:
+                if np.linalg.norm(ped.position - pillar) < 3.0:
+                    pillar_count += 1
+                    break
+
+        # 归一化 (假设最大密度是20人)
+        gate_density = min(gate_count / 20.0, 1.0)
+        pillar_density = min(pillar_count / 20.0, 1.0)
+
+        return [gate_density, pillar_density]
 
     def _compute_exit_metrics(self, exit_obj: Exit) -> Tuple[float, float]:
         """计算出口附近的密度和拥堵度"""
@@ -1191,15 +1278,29 @@ class MetroEvacuationEnv(gym.Env):
         self.history['evacuated'].append(self.evacuated_count)
 
     def _compute_reward(self) -> float:
-        """计算奖励"""
+        """计算增强奖励
+
+        奖励组成:
+        1. 疏散奖励: 每人疏散的基础奖励
+        2. 拥堵惩罚: 出口拥堵的惩罚
+        3. 时间惩罚: 每步的时间成本
+        4. 完成奖励: 全部疏散的奖励
+        5. 均衡奖励: 出口分布均匀的奖励
+        6. 人流效率奖励: 疏散速率提升的奖励 (新增)
+        7. 安全间距奖励: 保持安全距离的奖励 (新增)
+        8. 引导惩罚: 过度引导的惩罚 (新增)
+        """
         reward = 0.0
         w = self.reward_weights
 
         # 1. 疏散奖励：每疏散一人给正奖励
-        new_evacuated = self.evacuated_count - (
-            self.history['evacuated'][-2] if len(self.history['evacuated']) > 1 else 0
-        )
+        new_evacuated = self.evacuated_count - self.last_evacuated_count
         reward += new_evacuated * w["evac_per_person"]
+
+        # 更新疏散速率缓冲区
+        self.evacuation_rate_buffer.pop(0)
+        self.evacuation_rate_buffer.append(float(new_evacuated))
+        self.last_evacuated_count = self.evacuated_count
 
         # 2. 拥堵惩罚
         total_congestion = 0
@@ -1215,6 +1316,9 @@ class MetroEvacuationEnv(gym.Env):
         # 4. 完成奖励
         if len(self.sfm.pedestrians) == 0:
             reward += w["completion_bonus"]
+            # 额外奖励：快速完成
+            time_bonus = max(0, (self.max_steps - self.current_step) / self.max_steps * 50)
+            reward += time_bonus
 
         # 5. 均衡奖励：鼓励各出口分流
         counts = list(self.evacuated_by_exit.values())
@@ -1226,7 +1330,60 @@ class MetroEvacuationEnv(gym.Env):
             balance_penalty = min(variance / 100.0, 1.0)
             reward -= balance_penalty * w["balance_penalty"]
 
+        # 6. 人流效率奖励：疏散速率提升
+        if len(self.evacuation_rate_buffer) >= 2:
+            rate_improvement = self.evacuation_rate_buffer[-1] - self.evacuation_rate_buffer[-2]
+            if rate_improvement > 0:
+                reward += rate_improvement * w.get("evacuation_rate_bonus", 2.0)
+
+        # 7. 安全间距奖励：避免过度拥挤
+        safety_reward = self._compute_safety_distance_reward()
+        reward += safety_reward * w.get("safety_distance_bonus", 0.5)
+
+        # 8. 引导惩罚：过度引导会增加混乱
+        # 通过guidance_count_this_episode跟踪，但这里不直接惩罚
+        # 因为引导是必要的，只有在引导效果不好时才惩罚
+
         return reward
+
+    def _compute_safety_distance_reward(self) -> float:
+        """计算安全间距奖励
+
+        基于行人之间的平均距离，鼓励保持安全距离
+
+        Returns:
+            安全间距奖励 (0-1, 越大越好)
+        """
+        if len(self.sfm.pedestrians) < 2:
+            return 1.0
+
+        # 计算平均最近邻距离
+        min_distances = []
+        positions = [ped.position for ped in self.sfm.pedestrians]
+
+        for i, pos_i in enumerate(positions):
+            min_dist = float('inf')
+            for j, pos_j in enumerate(positions):
+                if i != j:
+                    dist = np.linalg.norm(pos_i - pos_j)
+                    if dist < min_dist:
+                        min_dist = dist
+            if min_dist < float('inf'):
+                min_distances.append(min_dist)
+
+        if not min_distances:
+            return 1.0
+
+        avg_min_dist = np.mean(min_distances)
+
+        # 安全距离阈值: 0.8米 (基于人体宽度)
+        safe_distance = 0.8
+
+        if avg_min_dist >= safe_distance:
+            return 1.0
+        else:
+            # 距离越近，奖励越低
+            return max(0, avg_min_dist / safe_distance)
 
     def render(self):
         """渲染（简单版本，用于调试）"""

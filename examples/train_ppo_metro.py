@@ -9,11 +9,20 @@
 """
 
 import sys
+import platform
 from pathlib import Path
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root / "src"))
+
+# macOS multiprocessing 设置 (必须在导入其他模块之前)
+if platform.system() == "Darwin":
+    import multiprocessing
+    try:
+        multiprocessing.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass  # 已设置
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -66,7 +75,7 @@ class MetroTrainingCallback(BaseCallback):
         return True
 
 
-def train_ppo_metro(n_envs: int = 8, ppo_device: str = "cpu", trajectory_device: str = "auto"):
+def train_ppo_metro(n_envs: int = 8, ppo_device: str = "cpu", trajectory_device: str = "auto", total_timesteps: int = 500000):
     """训练地铁站场景PPO模型"""
 
     print("=" * 60)
@@ -89,7 +98,7 @@ def train_ppo_metro(n_envs: int = 8, ppo_device: str = "cpu", trajectory_device:
         "balance_penalty": 0.8,
     }
 
-    def make_env(rank: int, trajectory_device: str):
+    def make_env(rank: int, trajectory_device: str, enable_neural: bool = False):
         def _init():
             env = MetroEvacuationEnv(
                 n_pedestrians=80,
@@ -98,6 +107,7 @@ def train_ppo_metro(n_envs: int = 8, ppo_device: str = "cpu", trajectory_device:
                 dt=0.1,
                 reward_weights=reward_weights,
                 trajectory_device=trajectory_device,
+                enable_neural_prediction=enable_neural,  # 训练时禁用以避免多进程问题
             )
             env.reset(seed=rank)
             return env
@@ -107,18 +117,33 @@ def train_ppo_metro(n_envs: int = 8, ppo_device: str = "cpu", trajectory_device:
     if trajectory_device == "auto":
         trajectory_device = get_trajectory_device()
     if ppo_device == "auto":
-        ppo_device = "cpu"
-    env = make_env(0, trajectory_device)()
+        ppo_device = get_trajectory_device()
 
-    # 包装为向量环境
+    # 创建单独的评估环境 (可启用神经网络预测)
+    env = make_env(0, trajectory_device, enable_neural=False)()
+
+    # 包装为向量环境 (训练时禁用神经网络预测以避免多进程问题)
+    print(f"  创建 {n_envs} 个训练环境 (神经网络预测已禁用以提高稳定性)...")
     if n_envs > 1:
-        vec_env = SubprocVecEnv([make_env(i, trajectory_device) for i in range(n_envs)])
+        try:
+            vec_env = SubprocVecEnv([make_env(i, trajectory_device, enable_neural=False) for i in range(n_envs)])
+            print(f"  成功创建 SubprocVecEnv ({n_envs} 进程)")
+        except (EOFError, BrokenPipeError, Exception) as e:
+            print(f"  警告: SubprocVecEnv 失败 ({type(e).__name__}), 回退到 DummyVecEnv")
+            print(f"  提示: macOS 上建议使用 --n-envs 1")
+            vec_env = DummyVecEnv([make_env(i, trajectory_device, enable_neural=False) for i in range(n_envs)])
     else:
-        vec_env = DummyVecEnv([make_env(0, trajectory_device)])
+        vec_env = DummyVecEnv([make_env(0, trajectory_device, enable_neural=False)])
 
     # 创建 PPO 模型
     print("\n[2/4] 创建 PPO 模型...")
-    print("  - 观测空间: 8维 (3出口密度 + 3出口拥堵度 + 剩余比例 + 时间比例)")
+    print("  - 观测空间: 16维 (增强版)")
+    print("    [0-2]  3个出口密度")
+    print("    [3-5]  3个出口拥堵度")
+    print("    [6-8]  3个人流方向占比")
+    print("    [9-11] 3个历史疏散速率")
+    print("    [12-13] 2个瓶颈点密度")
+    print("    [14-15] 剩余比例 + 时间比例")
     print("  - 动作空间: Discrete(3) (选择推荐出口A/B/C)")
     print(f"  - 训练设备: {ppo_device.upper()}")
 
@@ -138,10 +163,9 @@ def train_ppo_metro(n_envs: int = 8, ppo_device: str = "cpu", trajectory_device:
     )
 
     # 训练
-    print("\n[3/4] 开始训练 (500000步)...")
+    print(f"\n[3/4] 开始训练 ({total_timesteps}步)...")
     callback = MetroTrainingCallback()
 
-    total_timesteps = 500000
     model.learn(
         total_timesteps=total_timesteps,
         callback=callback,
@@ -335,6 +359,8 @@ if __name__ == "__main__":
                         help="轨迹预测设备")
     parser.add_argument("--n-envs", type=int, default=8,
                         help="并行环境数量")
+    parser.add_argument("--total-timesteps", type=int, default=500000,
+                        help="总训练步数")
     args = parser.parse_args()
 
     if args.demo:
@@ -344,4 +370,5 @@ if __name__ == "__main__":
             n_envs=args.n_envs,
             ppo_device=args.ppo_device,
             trajectory_device=args.trajectory_device,
+            total_timesteps=args.total_timesteps,
         )

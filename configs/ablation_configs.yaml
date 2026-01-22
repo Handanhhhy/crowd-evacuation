@@ -1,0 +1,381 @@
+# Ablation Study Configuration
+# 消融实验配置文件
+#
+# 实验组:
+# A: PPO观测空间消融 (16D -> 8D -> 6D)
+# B: PPO奖励函数消融 (逐项移除奖励组件)
+# C: 轨迹预测消融 (神经网络 vs 线性外推)
+# D: 行人仿真消融 (SFM参数 + 行人类型)
+# E: 引导策略消融 (有/无PPO引导)
+
+# ============================================================
+# 全局配置
+# ============================================================
+global:
+  # 训练配置
+  training:
+    total_timesteps: 100000      # 每组实验训练步数
+    n_envs: 4                    # 并行环境数
+    learning_rate: 0.0003
+    n_steps: 1024
+    batch_size: 128
+    n_epochs: 10
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    ent_coef: 0.01
+    device: "auto"               # 自动检测GPU (mps/cuda/cpu)
+
+  # 评估配置
+  evaluation:
+    n_eval_episodes: 10          # 每个实验评估10个episode
+    random_seeds: [42, 123, 456] # 3个随机种子取平均
+
+  # 环境配置
+  environment:
+    num_pedestrians: 80
+    max_steps: 800
+    dt: 0.1
+
+  # 输出配置
+  output:
+    base_dir: "outputs/ablation"
+    save_model: true
+    save_logs: true
+    save_figures: true
+
+# ============================================================
+# A组: PPO观测空间消融
+# ============================================================
+group_A:
+  description: "PPO Observation Space Ablation"
+  experiments:
+    A1_16D:
+      name: "Full Observation (16D)"
+      observation_dim: 16
+      observation_features:
+        exit_density: true           # [0-2]  3维
+        exit_congestion: true        # [3-5]  3维
+        flow_direction: true         # [6-8]  3维
+        evacuation_rate: true        # [9-11] 3维
+        bottleneck_density: true     # [12-13] 2维
+        remaining_ratio: true        # [14]   1维
+        time_ratio: true             # [15]   1维
+      baseline: true
+
+    A2_8D:
+      name: "Reduced Observation (8D)"
+      observation_dim: 8
+      observation_features:
+        exit_density: true           # [0-2]  3维
+        exit_congestion: true        # [3-5]  3维
+        flow_direction: false
+        evacuation_rate: false
+        bottleneck_density: false
+        remaining_ratio: true        # [6]    1维
+        time_ratio: true             # [7]    1维
+      baseline: false
+
+    A3_6D:
+      name: "Minimal Observation (6D)"
+      observation_dim: 6
+      observation_features:
+        exit_density: true           # [0-2]  3维
+        exit_congestion: true        # [3-5]  3维
+        flow_direction: false
+        evacuation_rate: false
+        bottleneck_density: false
+        remaining_ratio: false
+        time_ratio: false
+      baseline: false
+
+# ============================================================
+# B组: PPO奖励函数消融
+# ============================================================
+group_B:
+  description: "PPO Reward Function Ablation"
+  experiments:
+    B1_full:
+      name: "Full Reward"
+      reward_weights:
+        evac_per_person: 12.0
+        congestion_penalty: 3.0
+        time_penalty: 0.2
+        completion_bonus: 200.0
+        balance_penalty: 0.8
+        flow_efficiency_bonus: 1.5
+        safety_distance_bonus: 0.5
+        guidance_penalty: 0.3
+        evacuation_rate_bonus: 2.0
+      baseline: true
+
+    B2_no_evac:
+      name: "No Evacuation Reward"
+      reward_weights:
+        evac_per_person: 0.0         # 移除
+        congestion_penalty: 3.0
+        time_penalty: 0.2
+        completion_bonus: 200.0
+        balance_penalty: 0.8
+        flow_efficiency_bonus: 1.5
+        safety_distance_bonus: 0.5
+        guidance_penalty: 0.3
+        evacuation_rate_bonus: 2.0
+      baseline: false
+
+    B3_no_congestion:
+      name: "No Congestion Penalty"
+      reward_weights:
+        evac_per_person: 12.0
+        congestion_penalty: 0.0      # 移除
+        time_penalty: 0.2
+        completion_bonus: 200.0
+        balance_penalty: 0.8
+        flow_efficiency_bonus: 1.5
+        safety_distance_bonus: 0.5
+        guidance_penalty: 0.3
+        evacuation_rate_bonus: 2.0
+      baseline: false
+
+    B4_no_balance:
+      name: "No Balance Penalty"
+      reward_weights:
+        evac_per_person: 12.0
+        congestion_penalty: 3.0
+        time_penalty: 0.2
+        completion_bonus: 200.0
+        balance_penalty: 0.0         # 移除
+        flow_efficiency_bonus: 1.5
+        safety_distance_bonus: 0.5
+        guidance_penalty: 0.3
+        evacuation_rate_bonus: 2.0
+      baseline: false
+
+    B5_no_flow_efficiency:
+      name: "No Flow Efficiency Bonus"
+      reward_weights:
+        evac_per_person: 12.0
+        congestion_penalty: 3.0
+        time_penalty: 0.2
+        completion_bonus: 200.0
+        balance_penalty: 0.8
+        flow_efficiency_bonus: 0.0   # 移除
+        safety_distance_bonus: 0.5
+        guidance_penalty: 0.3
+        evacuation_rate_bonus: 2.0
+      baseline: false
+
+    B6_no_safety:
+      name: "No Safety Distance Bonus"
+      reward_weights:
+        evac_per_person: 12.0
+        congestion_penalty: 3.0
+        time_penalty: 0.2
+        completion_bonus: 200.0
+        balance_penalty: 0.8
+        flow_efficiency_bonus: 1.5
+        safety_distance_bonus: 0.0   # 移除
+        guidance_penalty: 0.3
+        evacuation_rate_bonus: 2.0
+      baseline: false
+
+# ============================================================
+# C组: 轨迹预测消融
+# ============================================================
+group_C:
+  description: "Trajectory Prediction Ablation"
+  experiments:
+    C1_neural:
+      name: "Neural Network (Social-LSTM)"
+      trajectory_prediction:
+        use_neural_network: true
+        model_type: "social_lstm"    # 或 "trajectron"
+        model_path: "outputs/models/social_lstm.pt"
+      baseline: true
+
+    C2_linear:
+      name: "Linear Extrapolation"
+      trajectory_prediction:
+        use_neural_network: false
+        model_type: "linear"
+        model_path: null
+      baseline: false
+
+# ============================================================
+# D组: 行人仿真消融
+# ============================================================
+group_D:
+  description: "Pedestrian Simulation Ablation"
+  experiments:
+    D1_full:
+      name: "Full SFM + Multi-type Pedestrians"
+      sfm_params:
+        A: 2000.0                    # 社会力强度
+        B: 0.08                      # 社会力范围
+        tau: 0.5                     # 松弛时间
+      pedestrian_types:
+        use_multi_type: true
+        type_distribution:
+          NORMAL: 0.6
+          ELDERLY: 0.15
+          CHILD: 0.1
+          IMPATIENT: 0.15
+      gbm_correction:
+        enabled: true
+        weight: 0.3
+      baseline: true
+
+    D2_single_type:
+      name: "Single Type Pedestrians Only"
+      sfm_params:
+        A: 2000.0
+        B: 0.08
+        tau: 0.5
+      pedestrian_types:
+        use_multi_type: false
+        type_distribution:
+          NORMAL: 1.0                # 只使用NORMAL类型
+          ELDERLY: 0.0
+          CHILD: 0.0
+          IMPATIENT: 0.0
+      gbm_correction:
+        enabled: true
+        weight: 0.3
+      baseline: false
+
+    D3_weak_social_force:
+      name: "Reduced Social Force (A=1000)"
+      sfm_params:
+        A: 1000.0                    # 减小社会力强度
+        B: 0.08
+        tau: 0.5
+      pedestrian_types:
+        use_multi_type: true
+        type_distribution:
+          NORMAL: 0.6
+          ELDERLY: 0.15
+          CHILD: 0.1
+          IMPATIENT: 0.15
+      gbm_correction:
+        enabled: true
+        weight: 0.3
+      baseline: false
+
+    D4_no_gbm:
+      name: "No GBM Correction"
+      sfm_params:
+        A: 2000.0
+        B: 0.08
+        tau: 0.5
+      pedestrian_types:
+        use_multi_type: true
+        type_distribution:
+          NORMAL: 0.6
+          ELDERLY: 0.15
+          CHILD: 0.1
+          IMPATIENT: 0.15
+      gbm_correction:
+        enabled: false               # 禁用GBM修正
+        weight: 0.0
+      baseline: false
+
+# ============================================================
+# E组: 引导策略消融
+# ============================================================
+group_E:
+  description: "Guidance Strategy Ablation"
+  experiments:
+    E1_ppo_guidance:
+      name: "PPO-based Guidance"
+      guidance:
+        enabled: true
+        policy_type: "ppo"
+        model_path: "outputs/models/ppo_metro.zip"
+      baseline: true
+
+    E2_no_guidance:
+      name: "No Guidance (Free Choice)"
+      guidance:
+        enabled: false
+        policy_type: "none"
+        model_path: null
+      baseline: false
+
+# ============================================================
+# 评估指标定义
+# ============================================================
+metrics:
+  primary:
+    - name: "evacuation_rate"
+      description: "疏散完成率 (evacuated / total)"
+      unit: "%"
+      higher_is_better: true
+
+    - name: "avg_evacuation_time"
+      description: "平均疏散时间"
+      unit: "steps"
+      higher_is_better: false
+
+    - name: "max_congestion"
+      description: "最大拥堵度"
+      unit: "人/m²"
+      higher_is_better: false
+
+    - name: "exit_balance"
+      description: "出口均衡度 (std of exit counts)"
+      unit: "-"
+      higher_is_better: false
+
+    - name: "cumulative_reward"
+      description: "累计奖励"
+      unit: "-"
+      higher_is_better: true
+
+  secondary:
+    - name: "avg_speed"
+      description: "平均行人速度"
+      unit: "m/s"
+      higher_is_better: true
+
+    - name: "guidance_count"
+      description: "引导次数"
+      unit: "-"
+      higher_is_better: false
+
+# ============================================================
+# 统计分析配置
+# ============================================================
+statistical_analysis:
+  # 显著性检验
+  significance_test:
+    method: "paired_t_test"        # 或 "wilcoxon"
+    alpha: 0.05
+
+  # 效果量计算
+  effect_size:
+    method: "cohens_d"
+
+# ============================================================
+# 可视化配置
+# ============================================================
+visualization:
+  # 对比图表
+  comparison_charts:
+    - type: "bar"
+      metrics: ["evacuation_rate", "avg_evacuation_time", "max_congestion"]
+      group_by: "experiment_group"
+
+    - type: "radar"
+      metrics: ["evacuation_rate", "exit_balance", "cumulative_reward"]
+      normalize: true
+
+  # 训练曲线
+  training_curves:
+    plot_mean_reward: true
+    plot_episode_length: true
+    smoothing_window: 10
+
+  # 热力图
+  heatmaps:
+    show_correlation: true
+    show_significance: true

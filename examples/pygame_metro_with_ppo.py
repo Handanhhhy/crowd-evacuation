@@ -237,12 +237,15 @@ class MetroStationWithPPO:
         if model_path is not None and self.use_ppo:
             try:
                 self.ppo_model = PPO.load(str(model_path))
+                obs_dim = self.ppo_model.observation_space.shape[0]
                 print(f"PPO模型已加载: {model_path}")
-                if self.is_metro_model:
-                    print("  (使用地铁站专用3出口模型，观测维度=8)")
+                if obs_dim >= 16:
+                    print(f"  (增强版16维观测模型)")
+                elif obs_dim == 8:
+                    print(f"  (地铁站专用8维观测模型)")
                 else:
-                    print("  (使用旧版2出口模型，观测维度=6)")
-                    print("  提示: 运行 python examples/train_ppo_metro.py 训练地铁站专用模型")
+                    print(f"  (旧版{obs_dim}维观测模型)")
+                print(f"  提示: 如需训练16维增强版，运行 python examples/train_ppo_metro.py")
                 return True
             except Exception as e:
                 print(f"加载PPO模型失败: {e}")
@@ -457,25 +460,60 @@ class MetroStationWithPPO:
     def get_ppo_observation(self):
         """获取PPO模型的观测状态
 
-        - 地铁站模型 (is_metro_model=True): 8维 (3出口)
-        - 旧版模型 (is_metro_model=False): 6维 (2出口)
+        - 增强版模型 (16维): 完整观测信息
+        - 旧版地铁站模型 (8维): 兼容模式
+        - 更旧版模型 (6维): 兼容2出口模式
         """
         # 计算各出口附近的密度和拥堵度
         exit_densities = []
         exit_congestions = []
+        exit_flow_ratios = []
+
+        total_peds = len(self.model.pedestrians)
 
         for exit_info in self.exits:
             density, congestion = self._compute_exit_metrics(exit_info['position'])
             exit_densities.append(density)
             exit_congestions.append(congestion)
 
+            # 计算走向该出口的行人比例
+            flow_count = 0
+            for ped in self.model.pedestrians:
+                if np.linalg.norm(ped.target - exit_info['position']) < 2.0:
+                    flow_count += 1
+            flow_ratio = flow_count / max(total_peds, 1)
+            exit_flow_ratios.append(flow_ratio)
+
         # 剩余人数比例
-        remaining_ratio = len(self.model.pedestrians) / max(self.n_pedestrians, 1)
+        remaining_ratio = total_peds / max(self.n_pedestrians, 1)
 
         # 时间比例
         time_ratio = min(self.step_count / 1000, 1.0)
 
-        if self.is_metro_model:
+        # 历史疏散速率 (简化: 使用当前疏散比例的变化)
+        evac_rate = self.evacuated_count / max(self.n_pedestrians, 1)
+        evacuation_rates = [evac_rate, evac_rate, evac_rate]  # 简化处理
+
+        # 瓶颈点密度
+        bottleneck_densities = self._compute_bottleneck_densities()
+
+        # 检测模型期望的观测维度
+        if self.ppo_model is not None:
+            expected_dim = self.ppo_model.observation_space.shape[0]
+        else:
+            expected_dim = 16 if self.is_metro_model else 8
+
+        if expected_dim >= 16:
+            # 16维增强观测
+            obs = np.array([
+                exit_densities[0], exit_densities[1], exit_densities[2],
+                exit_congestions[0], exit_congestions[1], exit_congestions[2],
+                exit_flow_ratios[0], exit_flow_ratios[1], exit_flow_ratios[2],
+                evacuation_rates[0], evacuation_rates[1], evacuation_rates[2],
+                bottleneck_densities[0], bottleneck_densities[1],
+                remaining_ratio, time_ratio
+            ], dtype=np.float32)
+        elif expected_dim == 8 or self.is_metro_model:
             # 8维观测: 3出口密度 + 3出口拥堵度 + 剩余比例 + 时间比例
             obs = np.array([
                 exit_densities[0], exit_densities[1], exit_densities[2],
@@ -483,7 +521,7 @@ class MetroStationWithPPO:
                 remaining_ratio, time_ratio
             ], dtype=np.float32)
         else:
-            # 6维观测 (兼容旧版2出口模型): 2出口密度 + 2出口拥堵度 + 剩余比例 + 时间比例
+            # 6维观测 (兼容旧版2出口模型)
             obs = np.array([
                 exit_densities[0], exit_densities[1],
                 exit_congestions[0], exit_congestions[1],
@@ -491,6 +529,32 @@ class MetroStationWithPPO:
             ], dtype=np.float32)
 
         return np.clip(obs, 0.0, 1.0)
+
+    def _compute_bottleneck_densities(self):
+        """计算瓶颈点密度"""
+        gate_zone = {'x_min': 18, 'x_max': 22, 'y_min': 7, 'y_max': 33}
+        gate_count = 0
+        pillar_count = 0
+
+        for ped in self.model.pedestrians:
+            x, y = ped.position
+
+            # 检查是否在闸机区
+            if (gate_zone['x_min'] <= x <= gate_zone['x_max'] and
+                gate_zone['y_min'] <= y <= gate_zone['y_max']):
+                gate_count += 1
+
+            # 检查是否靠近任何柱子 (3米内)
+            for pillar in self.pillars:
+                if np.linalg.norm(ped.position - pillar) < 3.0:
+                    pillar_count += 1
+                    break
+
+        # 归一化
+        gate_density = min(gate_count / 20.0, 1.0)
+        pillar_density = min(pillar_count / 20.0, 1.0)
+
+        return [gate_density, pillar_density]
 
     def _compute_exit_metrics(self, exit_pos):
         """计算出口附近的密度和拥堵度"""
