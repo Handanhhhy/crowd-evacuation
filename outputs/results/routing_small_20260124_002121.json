@@ -1,0 +1,26 @@
+{
+  "timestamp": "2026-01-24T00:21:21.601392",
+  "method": "sfm_dynamic_routing",
+  "flow_level": "small",
+  "total_pedestrians": 100,
+  "evacuated": 43,
+  "evacuation_rate": 43.0,
+  "remaining": 55,
+  "sim_time": 30.0,
+  "real_time": 12.94942021369934,
+  "total_reward": 399.4644082493019,
+  "completed": false,
+  "evacuated_by_exit": {
+    "gate_a": 3,
+    "gate_zi": 4,
+    "gate_b": 6,
+    "gate_c": 7,
+    "gate_d": 5,
+    "gate_e": 5,
+    "gate_f": 6,
+    "gate_g": 7
+  },
+  "max_steps": 300,
+  "balance_ratio": 0.3932289023284714,
+  "reassignment_count": 3026
+}

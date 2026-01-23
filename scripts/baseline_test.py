@@ -11,6 +11,9 @@ import numpy as np
 from simulation.large_station_env import LargeStationEnv
 import time
 import argparse
+import json
+import os
+from datetime import datetime
 
 
 def run_baseline_test(flow_level='small', max_steps=3000, n_peds=None, verbose=True):
@@ -89,7 +92,9 @@ def run_baseline_test(flow_level='small', max_steps=3000, n_peds=None, verbose=T
                 pct = 100 * count / max(info['evacuated'], 1)
                 print(f"  {exit_id}: {count:4d} ({pct:5.1f}%)")
 
-    return {
+    result = {
+        'timestamp': datetime.now().isoformat(),
+        'method': 'baseline_sfm',
         'flow_level': flow_level,
         'total_pedestrians': env.n_pedestrians,
         'evacuated': info['evacuated'],
@@ -100,7 +105,33 @@ def run_baseline_test(flow_level='small', max_steps=3000, n_peds=None, verbose=T
         'total_reward': total_reward,
         'completed': terminated,
         'evacuated_by_exit': info['evacuated_by_exit'],
+        'max_steps': max_steps,
     }
+
+    # 保存结果
+    save_result(result)
+
+    return result
+
+
+def save_result(result: dict):
+    """保存测试结果到JSON文件"""
+    output_dir = 'outputs/results'
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 单次结果文件
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"{output_dir}/baseline_{result['flow_level']}_{timestamp}.json"
+
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
+    print(f"\n结果已保存: {filename}")
+
+    # 追加到汇总文件
+    summary_file = f"{output_dir}/baseline_summary.jsonl"
+    with open(summary_file, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(result, ensure_ascii=False) + '\n')
+    print(f"已追加到汇总: {summary_file}")
 
 
 def run_all_levels():

@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-01-24T00:21:08.641346",
+  "method": "baseline_sfm",
+  "flow_level": "small",
+  "total_pedestrians": 100,
+  "evacuated": 10,
+  "evacuation_rate": 10.0,
+  "remaining": 89,
+  "sim_time": 30.0,
+  "real_time": 15.121253967285156,
+  "total_reward": -38.308308932588105,
+  "completed": false,
+  "evacuated_by_exit": {
+    "gate_a": 3,
+    "gate_zi": 1,
+    "gate_b": 1,
+    "gate_c": 0,
+    "gate_d": 1,
+    "gate_e": 2,
+    "gate_f": 1,
+    "gate_g": 1
+  },
+  "max_steps": 300
+}
