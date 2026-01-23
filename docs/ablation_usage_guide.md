@@ -1,5 +1,13 @@
 # 消融实验使用指南
 
+---
+
+## ⚠️ 核心原则
+
+> **所有消融实验必须通过跨流量泛化性验证：小流量训练的模型必须能用于大流量场景。**
+
+---
+
 ## 目录
 
 1. [快速开始](#快速开始)
@@ -45,8 +53,9 @@ python examples/run_ablation.py
 | A | 观测空间 | 测试不同维度的观测向量 | 3 |
 | B | 奖励函数 | 逐个移除奖励组件 | 6 |
 | C | 轨迹预测 | 神经网络 vs 线性外推 | 2 |
-| D | 行人仿真 | SFM参数和行人类型 | 4 |
+| D | 行人仿真 | SFM参数和行人类型 | 6 |
 | E | 引导策略 | 有无PPO引导对比 | 2 |
+| **F** | **泛化性测试** | **跨流量等级验证** | **3** |
 
 ### A组：观测空间消融
 
@@ -54,9 +63,28 @@ python examples/run_ablation.py
 
 | 实验ID | 观测维度 | 包含信息 |
 |--------|----------|----------|
-| A1_16D | 16维 | 全部信息（基准） |
-| A2_8D | 8维 | 出口密度 + 拥堵度 + 剩余/时间 |
-| A3_6D | 6维 | 仅出口密度 + 拥堵度 |
+| A1_41D | 41维 | 全部信息（基准）：出口(30) + 全局(6) + 瓶颈(5) |
+| A2_20D | 20维 | 出口密度(10) + 出口拥堵(10) |
+| A3_12D | 12维 | 出口密度(10) + 剩余比例 + 时间比例 |
+
+**观测空间构成（41维基准）**：
+```
+出口相关 (30维):
+  - exit_densities[10]: 各出口密度 (归一化)
+  - exit_congestions[10]: 各出口拥堵度 (归一化)
+  - exit_flow_rates[10]: 各出口流量 (归一化)
+
+全局状态 (6维):
+  - remaining_ratio: 剩余人数比例
+  - time_ratio: 时间比例
+  - avg_speed_ratio: 平均速度比例
+  - panic_level: 恐慌水平
+  - crush_risk: 踩踏风险
+  - spawn_pressure: 涌入压力
+
+瓶颈状态 (5维):
+  - bottleneck_densities[5]: 各瓶颈区密度
+```
 
 ### B组：奖励函数消融
 
@@ -80,12 +108,26 @@ python examples/run_ablation.py
 
 ### D组：行人仿真消融
 
-| 实验ID | 配置 |
-|--------|------|
-| D1_full | 完整配置（基准） |
-| D2_single_type | 只用NORMAL类型行人 |
-| D3_weak_social_force | 减弱社会力强度 |
-| D4_no_gbm | 禁用GBM行为修正 |
+| 实验ID | 配置 | 说明 |
+|--------|------|------|
+| D1_full | 完整配置（基准） | 7种行人类型 + 完整SFM |
+| D2_no_luggage | 无行李行人 | 只有 NORMAL/ELDERLY/CHILD/IMPATIENT |
+| D3_single_type | 只用NORMAL类型 | 测试行人多样性影响 |
+| D4_weak_social_force | 减弱社会力强度 | A=1000, B=0.04 |
+| D5_no_gbm | 禁用GBM行为修正 | 测试GBM预测器影响 |
+| D6_high_luggage | 高行李比例 | 行李行人占比 60% |
+
+**行人类型分布对比**：
+
+| 类型 | D1_full | D2_no_luggage | D3_single | D6_high_luggage |
+|------|---------|---------------|-----------|-----------------|
+| NORMAL | 40% | 57% | 100% | 20% |
+| ELDERLY | 10% | 14% | - | 5% |
+| CHILD | 5% | 7% | - | 5% |
+| IMPATIENT | 5% | 7% | - | 5% |
+| WITH_SMALL_BAG | 25% | - | - | 30% |
+| WITH_LUGGAGE | 12% | - | - | 25% |
+| WITH_LARGE_LUGGAGE | 3% | - | - | 10% |
 
 ### E组：引导策略消融
 
@@ -93,6 +135,44 @@ python examples/run_ablation.py
 |--------|----------|
 | E1_ppo_guidance | PPO智能引导 |
 | E2_no_guidance | 无引导（自由选择） |
+
+### F组：跨流量泛化性测试 ⭐
+
+> **这是最重要的实验组，验证模型是否满足核心设计原则。**
+
+| 实验ID | 训练流量 | 测试流量 | 说明 |
+|--------|----------|----------|------|
+| F1_small_to_all | 小(1000人) | 小/中/大 | **核心验证**：小流量训练→全流量测试 |
+| F2_medium_to_all | 中(2000人) | 小/中/大 | 对比：中流量训练效果 |
+| F3_curriculum | 渐进式 | 小/中/大 | 课程学习：小→中→大 |
+
+**F组验证标准**：
+
+| 测试流量 | 疏散率要求 | 最大密度要求 | 状态 |
+|----------|-----------|-------------|------|
+| 小(1000人) | ≥ 95% | < 4.0 人/m² | 必须通过 |
+| 中(2000人) | ≥ 90% | < 4.0 人/m² | 必须通过 |
+| 大(3000人) | ≥ 85% | < 4.5 人/m² | 必须通过 |
+
+**F组运行示例**：
+
+```bash
+# 运行核心泛化性验证
+python examples/run_ablation.py -e F1_small_to_all
+
+# 输出示例
+┌─────────────────────────────────────────────────────────┐
+│ F1_small_to_all 泛化性测试结果                            │
+├──────────┬────────────┬────────────┬───────────────────┤
+│ 测试流量  │ 疏散率      │ 最大密度    │ 状态              │
+├──────────┼────────────┼────────────┼───────────────────┤
+│ small    │ 97.2%      │ 2.8 人/m²  │ ✅ PASS           │
+│ medium   │ 93.5%      │ 3.4 人/m²  │ ✅ PASS           │
+│ large    │ 88.1%      │ 4.2 人/m²  │ ✅ PASS           │
+├──────────┴────────────┴────────────┴───────────────────┤
+│ 总体结果: ✅ 泛化性验证通过                               │
+└─────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -120,7 +200,7 @@ python examples/run_ablation.py [选项]
 
 ```bash
 # 只运行A1实验，1万步（约3分钟）
-python examples/run_ablation.py -e A1_16D -t 10000
+python examples/run_ablation.py -e A1_41D -t 10000
 ```
 
 #### 2. 运行一个完整的实验组
@@ -167,20 +247,28 @@ python examples/run_ablation.py --summary-only
 
 ```bash
 # 第1步：快速验证流程是否正常（5分钟）
-python examples/run_ablation.py -e A1_16D -t 5000
+python examples/run_ablation.py -e A1_41D -t 5000
 
-# 第2步：运行最重要的对比实验（1小时）
+# 第2步：⭐ 运行泛化性验证（最重要，必须通过）
+python examples/run_ablation.py -g F
+
+# 第3步：运行引导策略对比实验（1小时）
 python examples/run_ablation.py -g E -t 50000
 
-# 第3步：运行观测空间消融（3小时）
+# 第4步：运行观测空间消融（3小时）
 python examples/run_ablation.py -g A
 
-# 第4步：运行奖励函数消融（6小时）
+# 第5步：运行奖励函数消融（6小时）
 python examples/run_ablation.py -g B
 
-# 第5步：运行剩余实验
-python examples/run_ablation.py -g C D
+# 第6步：运行行人仿真消融（含行李类型）
+python examples/run_ablation.py -g D
+
+# 第7步：运行轨迹预测消融
+python examples/run_ablation.py -g C
 ```
+
+> ⚠️ **重要**：F组泛化性测试必须通过，否则其他消融实验结果无意义。
 
 ---
 
@@ -238,8 +326,22 @@ open outputs/ablation/summary/ablation_report.md
 | evacuation_rate | 疏散完成率 | 越高越好 |
 | evacuation_time | 平均疏散时间（步数） | 越低越好 |
 | max_congestion | 最大拥堵度 | 越低越好 |
-| exit_balance | 出口负载均衡度（标准差） | 越低越好 |
+| max_local_density | 最大局部密度（人/m²） | < 4.5 |
+| exit_balance | 出口负载均衡度（变异系数） | 越低越好 |
 | cumulative_reward | 累计奖励 | 越高越好 |
+| **generalization_score** | **泛化性得分** | **越高越好** |
+
+**泛化性得分计算**：
+```
+generalization_score = (small_rate + medium_rate + large_rate) / 3
+                     × (1 - density_penalty)
+
+其中:
+- small_rate: 小流量疏散率
+- medium_rate: 中流量疏散率
+- large_rate: 大流量疏散率
+- density_penalty: 超过安全密度的惩罚
+```
 
 ---
 
@@ -374,22 +476,27 @@ open outputs/ablation/summary/ablation_report.md
 cd /Users/denghandan/Documents/Demo/crowd-evacuation
 
 # 2. 快速测试（确保一切正常）
-python examples/run_ablation.py -e A1_16D -t 5000
+python examples/run_ablation.py -e A1_41D -t 5000
 
 # 3. 查看测试结果
 ls outputs/ablation/
-cat outputs/ablation/A_A1_16D_seed42/eval_results.json
+cat outputs/ablation/A_A1_41D_seed42/eval_results.json
 
-# 4. 运行完整的A组实验
-python examples/run_ablation.py -g A
+# 4. ⭐ 运行泛化性验证（最重要）
+python examples/run_ablation.py -g F
 
-# 5. 生成汇总报告
+# 5. 确认泛化性通过后，运行其他实验
+python examples/run_ablation.py -g A B D E
+
+# 6. 生成汇总报告
 python examples/run_ablation.py --summary-only
 
-# 6. 查看报告
+# 7. 查看报告
 open outputs/ablation/summary/ablation_report.md
-open outputs/ablation/summary/comparison_A.png
+open outputs/ablation/summary/comparison_F.png  # 泛化性对比图
 ```
+
+> ⚠️ **注意**：如果 F 组泛化性验证未通过，需要先排查归一化问题，再进行其他实验。
 
 ---
 
