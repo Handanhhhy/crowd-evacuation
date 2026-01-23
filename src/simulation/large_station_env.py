@@ -105,14 +105,25 @@ class Escalator:
 class LargeStationEnv(gym.Env):
     """成都东站大型地铁站疏散环境 (T形布局)
 
-    观测空间 (34维 - 归一化):
+    观测空间 (41维 - 归一化):
+        出口相关 (24维):
         - 8个出口密度 (8)
         - 8个出口拥堵度 (8)
-        - 8个出口人流方向占比 (8)
-        - 5步历史疏散速率 (5)
-        - 3个扶梯涌入点密度 (3)
+        - 8个出口流量比例 (8)
+
+        全局状态 (6维):
         - 剩余人数比例 (1)
         - 时间比例 (1)
+        - 平均速度比例 (1)
+        - 恐慌水平 (1)
+        - 踩踏风险 (1)
+        - 涌入压力 (1)
+
+        涌入点密度 (7维):
+        - 7个涌入点密度 (5扶梯 + 2步梯)
+
+        瓶颈区域 (4维):
+        - 4个关键瓶颈区域密度
 
     动作空间: Discrete(8) - 选择推荐的疏散出口
 
@@ -175,8 +186,9 @@ class LargeStationEnv(gym.Env):
         self._init_exits()
         self._init_escalators()
 
-        # 观测空间 (34维)
-        obs_dim = 34
+        # 观测空间 (41维) - 按文档5.3节设计
+        # 8出口×3=24 + 全局6 + 涌入点7 + 瓶颈4 = 41
+        obs_dim = 41
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(obs_dim,), dtype=np.float32
         )
@@ -237,11 +249,18 @@ class LargeStationEnv(gym.Env):
         self.exit_names = [e.name for e in self.exits]
 
     def _init_escalators(self):
-        """初始化扶梯 (3个涌入点)"""
+        """初始化涌入点 (7个: 5扶梯 + 2步梯)"""
         self.escalators = [
+            # 中间3个扶梯
             Escalator("escalator_1", np.array([52.5, 40.0]), (25.0, 16.0), "up", 60, True),
             Escalator("escalator_2", np.array([82.5, 40.0]), (25.0, 16.0), "up", 60, True),
             Escalator("escalator_3", np.array([112.5, 40.0]), (25.0, 16.0), "up", 60, True),
+            # 左上扶梯和步梯
+            Escalator("escalator_left_upper", np.array([10.0, 72.0]), (6.0, 12.0), "up", 60, True),
+            Escalator("stairs_left_upper", np.array([2.0, 72.0]), (6.0, 12.0), "up", 40, True),
+            # 左下扶梯和步梯
+            Escalator("escalator_left_lower", np.array([10.0, 8.0]), (6.0, 12.0), "up", 60, True),
+            Escalator("stairs_left_lower", np.array([2.0, 8.0]), (6.0, 12.0), "up", 40, True),
         ]
         self.n_escalators = len(self.escalators)
 
@@ -493,21 +512,26 @@ class LargeStationEnv(gym.Env):
         return self._get_observation(), {}
 
     def _get_observation(self) -> np.ndarray:
-        """获取观测 (34维)
+        """获取观测 (41维) - 按文档5.3节设计
 
-        [0-7]   8个出口密度
-        [8-15]  8个出口拥堵度
-        [16-23] 8个出口人流方向占比
-        [24-28] 5步历史疏散速率
-        [29-31] 3个扶梯涌入点密度
-        [32]    剩余人数比例
-        [33]    时间比例
+        [0-7]   8个出口密度 (归一化0-1)
+        [8-15]  8个出口拥堵度 (归一化0-1)
+        [16-23] 8个出口流量比例 (归一化0-1)
+        [24]    剩余人数比例
+        [25]    时间比例
+        [26]    平均速度比例
+        [27]    恐慌水平
+        [28]    踩踏风险
+        [29]    涌入压力
+        [30-36] 7个涌入点密度 (5扶梯+2步梯)
+        [37-40] 4个关键瓶颈区域密度
         """
+        total_peds = len(self.sfm.pedestrians)
+
+        # === 出口相关 (24维) ===
         exit_densities = []
         exit_congestions = []
         exit_flow_ratios = []
-
-        total_peds = len(self.sfm.pedestrians)
 
         for exit_obj in self.exits:
             density, congestion = self._compute_exit_metrics(exit_obj)
@@ -521,18 +545,49 @@ class LargeStationEnv(gym.Env):
             flow_ratio = flow_count / max(total_peds, 1)
             exit_flow_ratios.append(flow_ratio)
 
-        evacuation_rates = [min(r * 10.0, 1.0) for r in self.evacuation_rate_buffer]
-        escalator_densities = self._compute_escalator_densities()
+        # === 全局状态 (6维) ===
         remaining_ratio = total_peds / max(self.n_pedestrians, 1)
         time_ratio = self.current_step / self.max_steps
 
+        # 平均速度比例
+        if total_peds > 0:
+            avg_speed = np.mean([ped.speed for ped in self.sfm.pedestrians])
+            avg_speed_ratio = min(avg_speed / 1.5, 1.0)  # 1.5 m/s为参考速度
+        else:
+            avg_speed_ratio = 1.0
+
+        # 恐慌水平
+        if total_peds > 0:
+            panic_level = np.mean([ped.panic_factor for ped in self.sfm.pedestrians])
+        else:
+            panic_level = 0.0
+
+        # 踩踏风险
+        max_density, _ = self._detect_crush_risk()
+        crush_risk = min(max_density / LARGE_SCALE_SAFETY["critical_density"], 1.0)
+
+        # 涌入压力 (剩余待涌入人数比例)
+        remaining_spawn = self.lower_layer_count - self.spawned_from_lower
+        spawn_pressure = remaining_spawn / max(self.lower_layer_count, 1)
+
+        # === 涌入点密度 (7维) ===
+        escalator_densities = self._compute_escalator_densities()
+
+        # === 瓶颈区域密度 (4维) ===
+        bottleneck_densities = self._compute_bottleneck_densities()
+
         obs = np.array(
-            exit_densities +
-            exit_congestions +
-            exit_flow_ratios +
-            evacuation_rates +
-            escalator_densities +
-            [remaining_ratio, time_ratio],
+            exit_densities +           # 8维
+            exit_congestions +         # 8维
+            exit_flow_ratios +         # 8维
+            [remaining_ratio,          # 1维
+             time_ratio,               # 1维
+             avg_speed_ratio,          # 1维
+             panic_level,              # 1维
+             crush_risk,               # 1维
+             spawn_pressure] +         # 1维
+            escalator_densities +      # 7维
+            bottleneck_densities,      # 4维
             dtype=np.float32
         )
 
@@ -561,15 +616,43 @@ class LargeStationEnv(gym.Env):
         return density, congestion
 
     def _compute_escalator_densities(self) -> List[float]:
-        """计算扶梯涌入点密度"""
+        """计算7个涌入点密度 (5扶梯 + 2步梯)"""
         densities = []
         detection_radius = 8.0
-        max_density_people = max(self.n_pedestrians * 0.15, 15.0)
+        max_density_people = max(self.n_pedestrians * 0.10, 10.0)
 
         for esc in self.escalators:
             count = sum(
                 1 for ped in self.sfm.pedestrians
                 if np.linalg.norm(ped.position - esc.position) < detection_radius
+            )
+            density = min(count / max_density_people, 1.0)
+            densities.append(density)
+
+        return densities
+
+    def _compute_bottleneck_densities(self) -> List[float]:
+        """计算4个关键瓶颈区域密度"""
+        # 4个关键瓶颈区域：
+        # 1. 左侧走廊中部 (闸机a前)
+        # 2. 上部走廊中部
+        # 3. 下部走廊中部
+        # 4. 中间区域核心
+        bottleneck_areas = [
+            np.array([10.0, 40.0]),    # 左侧走廊中部
+            np.array([85.0, 62.0]),    # 上部走廊中部
+            np.array([85.0, 18.0]),    # 下部走廊中部
+            np.array([85.0, 40.0]),    # 中间区域核心
+        ]
+
+        densities = []
+        detection_radius = 10.0
+        max_density_people = max(self.n_pedestrians * 0.15, 15.0)
+
+        for area_center in bottleneck_areas:
+            count = sum(
+                1 for ped in self.sfm.pedestrians
+                if np.linalg.norm(ped.position - area_center) < detection_radius
             )
             density = min(count / max_density_people, 1.0)
             densities.append(density)
