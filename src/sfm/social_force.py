@@ -23,11 +23,17 @@ class PedestrianType(Enum):
     - ELDERLY: 老年人 (Weidmann 1993)
     - CHILD: 儿童 (Fruin 1971)
     - IMPATIENT: 急躁型 (参考 Helbing)
+    - WITH_SMALL_BAG: 携带小包 (背包/手提包)
+    - WITH_LUGGAGE: 携带拉杆箱
+    - WITH_LARGE_LUGGAGE: 携带大行李
     """
     NORMAL = "normal"      # 普通成年人
     ELDERLY = "elderly"    # 老人
     CHILD = "child"        # 儿童
     IMPATIENT = "impatient" # 急躁型
+    WITH_SMALL_BAG = "with_small_bag"  # 携带小包
+    WITH_LUGGAGE = "with_luggage"      # 携带拉杆箱
+    WITH_LARGE_LUGGAGE = "with_large_luggage"  # 携带大行李
 
 
 # 行人类型参数配置 (基于文献)
@@ -60,6 +66,27 @@ PEDESTRIAN_TYPE_PARAMS = {
         'reaction_time': 0.3,       # 反应更快
         'radius': 0.3,
         'color': 'red',
+    },
+    PedestrianType.WITH_SMALL_BAG: {
+        'desired_speed': 1.2,       # 背包略微降速
+        'speed_std': 0.2,
+        'reaction_time': 0.5,
+        'radius': 0.35,             # 略大半径
+        'color': 'cyan',
+    },
+    PedestrianType.WITH_LUGGAGE: {
+        'desired_speed': 0.9,       # 拉杆箱明显降速
+        'speed_std': 0.15,
+        'reaction_time': 0.6,
+        'radius': 0.5,              # 更大半径(含行李)
+        'color': 'orange',
+    },
+    PedestrianType.WITH_LARGE_LUGGAGE: {
+        'desired_speed': 0.7,       # 大行李显著降速
+        'speed_std': 0.1,
+        'reaction_time': 0.7,
+        'radius': 0.6,              # 最大半径
+        'color': 'purple',
     },
 }
 

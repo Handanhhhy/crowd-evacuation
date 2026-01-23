@@ -79,6 +79,16 @@ REWARD_DEFAULTS = {
     "safety_distance_bonus": 0.5,      # 安全间距奖励
     "guidance_penalty": 0.3,           # 频繁引导惩罚
     "evacuation_rate_bonus": 2.0,      # 疏散速率提升奖励
+    "crush_penalty": 10.0,             # 踩踏风险惩罚 (大规模安全)
+}
+
+# 大规模场景安全阈值
+LARGE_SCALE_SAFETY = {
+    "critical_density": 4.0,           # 危险密度阈值 (人/m²) - 超过可能踩踏
+    "warning_density": 2.5,            # 警告密度阈值 (人/m²)
+    "min_safe_distance": 0.5,          # 最小安全距离 (米)
+    "panic_spread_radius": 5.0,        # 恐慌传播半径 (米)
+    "panic_spread_rate": 0.1,          # 恐慌传播速率
 }
 
 @dataclass
@@ -503,9 +513,10 @@ class MetroEvacuationEnv(gym.Env):
             flow_ratio = flow_count / max(total_peds, 1)
             exit_flow_ratios.append(flow_ratio)
 
-        # 历史疏散速率 (归一化到0-1)
-        max_rate = self.n_pedestrians / 10.0  # 假设最大速率是每步疏散10%的人
-        evacuation_rates = [min(r / max_rate, 1.0) for r in self.evacuation_rate_buffer]
+        # 历史疏散速率 (已归一化到0-1)
+        # buffer 存储的是疏散比例，最大合理值约0.1 (每步疏散10%的人)
+        # 乘以10使其映射到0-1范围
+        evacuation_rates = [min(r * 10.0, 1.0) for r in self.evacuation_rate_buffer]
 
         # 瓶颈点密度
         bottleneck_densities = self._compute_bottleneck_densities()
@@ -535,6 +546,8 @@ class MetroEvacuationEnv(gym.Env):
         1. 闸机区 (x: 18-22, y: 7-33) - 主要拥堵点
         2. 柱子区 (围绕6个柱子的区域) - 次要拥堵点
 
+        动态归一化: 基准随总人数调整，使模型能从小规模泛化到大规模
+
         Returns:
             [闸机区密度, 柱子区密度] (归一化到0-1)
         """
@@ -556,14 +569,21 @@ class MetroEvacuationEnv(gym.Env):
                     pillar_count += 1
                     break
 
-        # 归一化 (假设最大密度是20人)
-        gate_density = min(gate_count / 20.0, 1.0)
-        pillar_density = min(pillar_count / 20.0, 1.0)
+        # 动态归一化 (基准随人数调整)
+        # 闸机区最多容纳约25%的人，柱子区约25%的人
+        max_gate_people = max(self.n_pedestrians * 0.25, 5.0)
+        max_pillar_people = max(self.n_pedestrians * 0.25, 5.0)
+
+        gate_density = min(gate_count / max_gate_people, 1.0)
+        pillar_density = min(pillar_count / max_pillar_people, 1.0)
 
         return [gate_density, pillar_density]
 
     def _compute_exit_metrics(self, exit_obj: Exit) -> Tuple[float, float]:
-        """计算出口附近的密度和拥堵度"""
+        """计算出口附近的密度和拥堵度
+
+        动态归一化: 密度基准随总人数调整，使模型能从小规模泛化到大规模
+        """
         radius = 8.0  # 检测半径（地铁站场景更大）
         exit_pos = exit_obj.position
 
@@ -573,10 +593,13 @@ class MetroEvacuationEnv(gym.Env):
             if dist < radius:
                 nearby_peds.append(ped)
 
-        # 密度 (归一化到 0-1)
-        density = min(len(nearby_peds) / 25.0, 1.0)
+        # 密度 (动态归一化到 0-1)
+        # 基准: 假设人均分到3个出口，每个出口最多承载总人数的1/3
+        # 这样50人和1500人的密度值范围一致
+        max_density_people = max(self.n_pedestrians / 3.0, 10.0)  # 最小基准10人
+        density = min(len(nearby_peds) / max_density_people, 1.0)
 
-        # 拥堵度 (基于平均速度下降)
+        # 拥堵度 (基于平均速度下降) - 这个是相对值，不需要改
         if len(nearby_peds) > 0:
             avg_speed = np.mean([ped.speed for ped in nearby_peds])
             expected_speed = 1.2
@@ -809,7 +832,7 @@ class MetroEvacuationEnv(gym.Env):
 
     def rebalance_exit_assignments(
         self,
-        threshold: int = 15,
+        threshold: int = None,
         t_horizon: float = 5.0
     ) -> int:
         """重新分配行人到出口，预防性避免拥堵
@@ -821,11 +844,15 @@ class MetroEvacuationEnv(gym.Env):
 
         Args:
             threshold: 单出口人数阈值，超过则视为过载
+                       如果为None，自动计算为 n_pedestrians/3 * 1.5
             t_horizon: 预测时间范围
 
         Returns:
             重新分配的行人数量
         """
+        # 动态阈值：每出口平均承载的1.5倍视为过载
+        if threshold is None:
+            threshold = max(int(self.n_pedestrians / 3 * 1.5), 5)
         # 1. 预测未来位置
         future_positions = self.predict_future_positions(t_horizon)
 
@@ -1216,14 +1243,21 @@ class MetroEvacuationEnv(gym.Env):
                 corner_avoided = self.proactive_corner_avoidance()
             else:
                 # 回退到旧版负载均衡（无神经网络预测时）
+                # 动态阈值：每出口平均承载的1.5倍视为过载
+                dynamic_threshold = max(int(self.n_pedestrians / 3 * 1.5), 5)
                 guided_count = self.rebalance_exit_assignments(
-                    threshold=8,
+                    threshold=dynamic_threshold,
                     t_horizon=3.0
                 )
 
         # 运行社会力模型多步
         for _ in range(5):
             self.sfm.step(self.dt)
+
+        # 大规模场景：恐慌传播 (每10步检测一次)
+        panic_spread_count = 0
+        if self.current_step % 10 == 0 and self.n_pedestrians > 100:
+            panic_spread_count = self._spread_panic()
 
         # 检查并移除已到达出口的行人
         self._check_evacuated()
@@ -1238,6 +1272,9 @@ class MetroEvacuationEnv(gym.Env):
         terminated = len(self.sfm.pedestrians) == 0
         truncated = self.current_step >= self.max_steps
 
+        # 大规模安全检测
+        max_density, danger_count = self._detect_crush_risk()
+
         obs = self._get_observation()
         info = {
             'evacuated': self.evacuated_count,
@@ -1249,6 +1286,10 @@ class MetroEvacuationEnv(gym.Env):
             'guided_this_step': guided_count,  # 本步引导的行人数（分层预测式引导）
             'corner_avoided_this_step': corner_avoided,  # 本步角落避免的行人数
             'neural_prediction': self.trajectory_predictor is not None,  # 是否使用神经网络预测
+            # 大规模安全指标
+            'max_local_density': max_density,        # 最大局部密度 (人/m²)
+            'danger_zone_count': danger_count,       # 危险区域行人数
+            'panic_spread_count': panic_spread_count,  # 本步新增恐慌人数
         }
 
         return obs, reward, terminated, truncated, info
@@ -1304,31 +1345,34 @@ class MetroEvacuationEnv(gym.Env):
         self.history['evacuated'].append(self.evacuated_count)
 
     def _compute_reward(self) -> float:
-        """计算增强奖励
+        """计算增强奖励 (归一化版本)
 
         奖励组成:
-        1. 疏散奖励: 每人疏散的基础奖励
+        1. 疏散奖励: 疏散比例的奖励 (归一化)
         2. 拥堵惩罚: 出口拥堵的惩罚
         3. 时间惩罚: 每步的时间成本
         4. 完成奖励: 全部疏散的奖励
-        5. 均衡奖励: 出口分布均匀的奖励
-        6. 人流效率奖励: 疏散速率提升的奖励 (新增)
-        7. 安全间距奖励: 保持安全距离的奖励 (新增)
-        8. 引导惩罚: 过度引导的惩罚 (新增)
+        5. 均衡奖励: 出口分布均匀的奖励 (归一化)
+        6. 人流效率奖励: 疏散速率提升的奖励 (归一化)
+        7. 安全间距奖励: 保持安全距离的奖励
+
+        归一化设计: 所有奖励信号相对于人数比例计算，使模型能从小规模泛化到大规模
         """
         reward = 0.0
         w = self.reward_weights
 
-        # 1. 疏散奖励：每疏散一人给正奖励
+        # 1. 疏散奖励：按疏散比例计算，而非绝对人数
+        # 这样50人疏散5人(10%) 和 1500人疏散150人(10%) 得到相同奖励
         new_evacuated = self.evacuated_count - self.last_evacuated_count
-        reward += new_evacuated * w["evac_per_person"]
+        evacuation_ratio = new_evacuated / max(self.n_pedestrians, 1)
+        reward += evacuation_ratio * w["evac_per_person"] * 100  # 乘100使数值合理
 
-        # 更新疏散速率缓冲区
+        # 更新疏散速率缓冲区 (存储比例而非绝对数)
         self.evacuation_rate_buffer.pop(0)
-        self.evacuation_rate_buffer.append(float(new_evacuated))
+        self.evacuation_rate_buffer.append(evacuation_ratio)
         self.last_evacuated_count = self.evacuated_count
 
-        # 2. 拥堵惩罚
+        # 2. 拥堵惩罚 (已经是归一化的0-1值)
         total_congestion = 0
         for exit_obj in self.exits:
             _, congestion = self._compute_exit_metrics(exit_obj)
@@ -1346,29 +1390,36 @@ class MetroEvacuationEnv(gym.Env):
             time_bonus = max(0, (self.max_steps - self.current_step) / self.max_steps * 50)
             reward += time_bonus
 
-        # 5. 均衡奖励：鼓励各出口分流
+        # 5. 均衡奖励：鼓励各出口分流 (归一化)
         counts = list(self.evacuated_by_exit.values())
-        if sum(counts) > 0:
-            # 计算分布均匀度（方差越小越好）
-            mean_count = sum(counts) / 3
-            variance = sum((c - mean_count) ** 2 for c in counts) / 3
-            # 归一化方差惩罚
-            balance_penalty = min(variance / 100.0, 1.0)
+        total_evacuated = sum(counts)
+        if total_evacuated > 0:
+            # 计算分布均匀度（用变异系数而非方差，自动归一化）
+            mean_count = total_evacuated / 3
+            if mean_count > 0:
+                std_count = np.sqrt(sum((c - mean_count) ** 2 for c in counts) / 3)
+                cv = std_count / mean_count  # 变异系数 (0-1范围)
+                balance_penalty = min(cv, 1.0)
+            else:
+                balance_penalty = 0.0
             reward -= balance_penalty * w["balance_penalty"]
 
-        # 6. 人流效率奖励：疏散速率提升
+        # 6. 人流效率奖励：疏散速率提升 (已归一化)
         if len(self.evacuation_rate_buffer) >= 2:
             rate_improvement = self.evacuation_rate_buffer[-1] - self.evacuation_rate_buffer[-2]
             if rate_improvement > 0:
-                reward += rate_improvement * w.get("evacuation_rate_bonus", 2.0)
+                reward += rate_improvement * w.get("evacuation_rate_bonus", 2.0) * 100
 
-        # 7. 安全间距奖励：避免过度拥挤
+        # 7. 安全间距奖励：避免过度拥挤 (已经是0-1)
         safety_reward = self._compute_safety_distance_reward()
         reward += safety_reward * w.get("safety_distance_bonus", 0.5)
 
-        # 8. 引导惩罚：过度引导会增加混乱
-        # 通过guidance_count_this_episode跟踪，但这里不直接惩罚
-        # 因为引导是必要的，只有在引导效果不好时才惩罚
+        # 8. 踩踏风险惩罚 (大规模安全机制)
+        max_density, danger_count = self._detect_crush_risk()
+        if danger_count > 0:
+            # 危险区域有人时给予惩罚
+            crush_penalty = (danger_count / max(self.n_pedestrians, 1)) * w.get("crush_penalty", 10.0)
+            reward -= crush_penalty
 
         return reward
 
@@ -1410,6 +1461,93 @@ class MetroEvacuationEnv(gym.Env):
         else:
             # 距离越近，奖励越低
             return max(0, avg_min_dist / safe_distance)
+
+    def _detect_crush_risk(self) -> Tuple[float, int]:
+        """检测踩踏风险 (大规模场景安全机制)
+
+        基于局部密度检测危险区域:
+        - 密度 > 4人/m² : 极危险，可能踩踏
+        - 密度 > 2.5人/m² : 警告，需要分流
+
+        Returns:
+            (最大局部密度, 危险区域行人数)
+        """
+        if len(self.sfm.pedestrians) < 10:
+            return 0.0, 0
+
+        safety = LARGE_SCALE_SAFETY
+        critical_density = safety["critical_density"]
+        warning_density = safety["warning_density"]
+
+        max_density = 0.0
+        danger_count = 0
+        detection_radius = 2.0  # 2米半径检测局部密度
+
+        for ped in self.sfm.pedestrians:
+            # 计算该行人周围的局部密度
+            nearby_count = 0
+            for other in self.sfm.pedestrians:
+                if other.id != ped.id:
+                    dist = np.linalg.norm(ped.position - other.position)
+                    if dist < detection_radius:
+                        nearby_count += 1
+
+            # 局部密度 = 人数 / 圆面积
+            local_density = nearby_count / (np.pi * detection_radius ** 2)
+            max_density = max(max_density, local_density)
+
+            if local_density > critical_density:
+                danger_count += 1
+
+        return max_density, danger_count
+
+    def _spread_panic(self) -> int:
+        """恐慌传播机制 (大规模场景)
+
+        当一个行人恐慌时，周围的人也会受到影响
+        传播规则:
+        - 恐慌因子 > 0.3 的行人会传播恐慌
+        - 传播半径内的行人恐慌因子增加
+        - 传播强度随距离衰减
+
+        Returns:
+            新增恐慌的行人数
+        """
+        if not hasattr(self.sfm, 'enable_panic') or not self.sfm.enable_panic:
+            return 0
+
+        safety = LARGE_SCALE_SAFETY
+        spread_radius = safety["panic_spread_radius"]
+        spread_rate = safety["panic_spread_rate"]
+
+        new_panic_count = 0
+
+        # 找出当前恐慌的行人
+        panicked_peds = [ped for ped in self.sfm.pedestrians
+                        if hasattr(ped, 'panic_factor') and ped.panic_factor > 0.3]
+
+        if not panicked_peds:
+            return 0
+
+        # 传播恐慌
+        for source in panicked_peds:
+            for target in self.sfm.pedestrians:
+                if target.id == source.id:
+                    continue
+
+                dist = np.linalg.norm(target.position - source.position)
+                if dist < spread_radius and dist > 0:
+                    # 传播强度随距离衰减
+                    spread_strength = spread_rate * (1 - dist / spread_radius)
+                    spread_strength *= source.panic_factor  # 源头恐慌程度也影响传播
+
+                    old_panic = target.panic_factor if hasattr(target, 'panic_factor') else 0
+                    target.panic_factor = min(0.5, old_panic + spread_strength)
+
+                    if old_panic < 0.1 and target.panic_factor >= 0.1:
+                        new_panic_count += 1
+
+        return new_panic_count
 
     def render(self):
         """渲染（简单版本，用于调试）"""

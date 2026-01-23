@@ -1,0 +1,261 @@
+# 成都东站大型地铁站场景配置
+# T形布局: 150m × 80m
+# 支持三种人流量等级: small/medium/large
+
+# 场景配置
+scene:
+  name: "chengdu_east_large_station"
+  width: 150.0  # 米
+  height: 80.0  # 米 (T形高度)
+  description: "成都东站出站层T形布局，含扶梯涌入和多出口疏散"
+
+# T形结构定义
+t_shape:
+  # 左侧走廊
+  left_corridor:
+    x_range: [0, 20]
+    y_range: [0, 80]
+  # 上部走廊
+  upper_corridor:
+    x_range: [20, 150]
+    y_range: [55, 70]
+  # 下部走廊
+  lower_corridor:
+    x_range: [20, 150]
+    y_range: [10, 25]
+  # 中间连通区域 (扶梯涌入区)
+  middle_area:
+    x_range: [20, 150]
+    y_range: [25, 55]
+
+# 人流量配置
+flow_levels:
+  small:
+    upper_layer: 500      # 上层初始人数
+    lower_layer: 500      # 下层总涌入人数
+    spawn_rate: 3.0       # 扶梯涌入速率 (人/秒)
+    total: 1000
+  medium:
+    upper_layer: 1000
+    lower_layer: 1000
+    spawn_rate: 5.0
+    total: 2000
+  large:
+    upper_layer: 1500
+    lower_layer: 1500
+    spawn_rate: 8.0
+    total: 3000
+
+# 默认人流量等级
+default_flow_level: "medium"
+
+# 行人类型分布 (日常模式)
+pedestrian_distribution:
+  normal:
+    NORMAL: 0.40
+    ELDERLY: 0.10
+    CHILD: 0.05
+    IMPATIENT: 0.05
+    WITH_SMALL_BAG: 0.25
+    WITH_LUGGAGE: 0.12
+    WITH_LARGE_LUGGAGE: 0.03
+  rush_hour:  # 高峰模式 (通勤为主)
+    NORMAL: 0.50
+    IMPATIENT: 0.15
+    WITH_SMALL_BAG: 0.30
+    WITH_LUGGAGE: 0.05
+    WITH_LARGE_LUGGAGE: 0.00
+    ELDERLY: 0.00
+    CHILD: 0.00
+
+# 出口配置 (闘機就是疏散出口)
+exits:
+  # 左侧闸机a (Y=40中心, 高度20)
+  - id: "gate_a"
+    position: [0.0, 40.0]
+    width: 20.0
+    direction: "left"
+    capacity: 100
+  # 右侧闸机子 (Y=40中心, 高度20)
+  - id: "gate_zi"
+    position: [150.0, 40.0]
+    width: 20.0
+    direction: "right"
+    capacity: 100
+  # 上排闸机 (Y=70)
+  - id: "gate_b"
+    position: [52.5, 70.0]  # 45-60
+    width: 15.0
+    direction: "up"
+    capacity: 150
+  - id: "gate_c"
+    position: [82.5, 70.0]  # 75-90
+    width: 15.0
+    direction: "up"
+    capacity: 150
+  - id: "gate_d"
+    position: [112.5, 70.0]  # 105-120
+    width: 15.0
+    direction: "up"
+    capacity: 150
+  # 下排闸机 (Y=10)
+  - id: "gate_e"
+    position: [52.5, 10.0]  # 45-60
+    width: 15.0
+    direction: "down"
+    capacity: 150
+  - id: "gate_f"
+    position: [82.5, 10.0]  # 75-90
+    width: 15.0
+    direction: "down"
+    capacity: 150
+  - id: "gate_g"
+    position: [112.5, 10.0]  # 105-120
+    width: 15.0
+    direction: "down"
+    capacity: 150
+
+# 扶梯配置 (中间涌入点)
+escalators:
+  - id: "escalator_1"
+    position: [52.5, 40.0]  # 扶梯1中心
+    size: [25.0, 16.0]
+    direction: "up"
+    spawn_point: true
+    capacity: 60
+  - id: "escalator_2"
+    position: [82.5, 40.0]  # 扶梯2中心
+    size: [25.0, 16.0]
+    direction: "up"
+    spawn_point: true
+    capacity: 60
+  - id: "escalator_3"
+    position: [112.5, 40.0]  # 扶梯3中心
+    size: [25.0, 16.0]
+    direction: "up"
+    spawn_point: true
+    capacity: 60
+
+# 左侧步梯和扶梯 (不是涌入点, 是疏散通道)
+stairs:
+  - id: "stair_upper"
+    position: [5.0, 71.0]
+    size: [6.0, 12.0]
+    direction: "up"
+  - id: "escalator_upper"
+    position: [13.0, 71.0]
+    size: [6.0, 12.0]
+    direction: "up"
+  - id: "stair_lower"
+    position: [5.0, 9.0]
+    size: [6.0, 12.0]
+    direction: "down"
+  - id: "escalator_lower"
+    position: [13.0, 9.0]
+    size: [6.0, 12.0]
+    direction: "down"
+
+# 电梯配置 (紧急模式禁用)
+elevator:
+  id: "elevator_main"
+  position: [24.0, 30.0]  # X=20附近, Y=26-34
+  size: [8.0, 8.0]
+  enabled_in_emergency: false
+
+# 障碍物配置 (扶梯护栏)
+obstacles:
+  escalator_barriers:
+    - [[40, 32], [40, 48], [65, 48], [65, 32]]   # 扶梯1区域
+    - [[70, 32], [70, 48], [95, 48], [95, 32]]   # 扶梯2区域
+    - [[100, 32], [100, 48], [125, 48], [125, 32]] # 扶梯3区域
+
+# 行人生成区域
+spawn_areas:
+  upper_layer:
+    - name: "upper_corridor"
+      bounds: [25, 55, 145, 68]
+      weight: 0.3
+    - name: "lower_corridor"
+      bounds: [25, 12, 145, 23]
+      weight: 0.3
+    - name: "middle_area"
+      bounds: [25, 28, 145, 52]
+      weight: 0.3
+    - name: "left_corridor"
+      bounds: [2, 20, 18, 60]
+      weight: 0.1
+  lower_layer:
+    - name: "escalator_1"
+      position: [52.5, 40.0]
+    - name: "escalator_2"
+      position: [82.5, 40.0]
+    - name: "escalator_3"
+      position: [112.5, 40.0]
+
+# 紧急模式配置
+emergency_mode:
+  enabled: true
+  target_time: 600  # 目标疏散时间: 10分钟 = 600秒
+  elevator_disabled: true
+  escalators_direction: "up"  # 扶梯只能向上 (持续涌入)
+  gates_direction: "out"  # 闸机只出不进
+
+# 社会力模型参数
+social_force:
+  tau: 0.5
+  A: 2000.0
+  B: 0.08
+  k: 120000.0
+  kappa: 240000.0
+  wall_A: 2000.0
+  wall_B: 0.08
+
+# 大规模安全机制
+large_scale_safety:
+  critical_density: 4.0
+  warning_density: 2.5
+  min_safe_distance: 0.5
+  panic_spread_radius: 5.0
+  panic_spread_rate: 0.1
+
+# 奖励权重
+reward_weights:
+  evac_per_person: 15.0
+  congestion_penalty: 4.0
+  time_penalty: 0.3
+  completion_bonus: 300.0
+  balance_penalty: 1.0
+  crush_penalty: 50.0
+  panic_penalty: 10.0
+
+# 仿真配置
+simulation:
+  dt: 0.1
+  max_time: 600
+  max_steps: 6000
+  fps: 30
+
+# 强化学习配置
+reinforcement_learning:
+  algorithm: "PPO"
+  gamma: 0.99
+  learning_rate: 0.0003
+  batch_size: 256
+  n_epochs: 10
+  n_steps: 2048
+
+# 观测空间配置 (归一化)
+observation_space:
+  exit_densities: 8       # 8个出口密度 (gate_a/zi/b/c/d/e/f/g)
+  exit_congestions: 8     # 8个出口拥堵度
+  flow_directions: 8      # 8个人流方向
+  evacuation_rates: 5     # 5步历史疏散速率
+  escalator_densities: 3  # 3个扶梯涌入点密度
+  remaining_ratio: 1      # 剩余人数比例
+  time_ratio: 1           # 时间比例
+  # 总计: 8+8+8+5+3+1+1 = 34维
+
+# 动作空间配置
+action_space:
+  type: "discrete"
+  n_actions: 8  # 选择推荐的疏散出口 (8个闘機)

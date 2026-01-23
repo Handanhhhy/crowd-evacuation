@@ -32,6 +32,9 @@ class PedestrianType(Enum):
     ELDERLY = "elderly"
     CHILD = "child"
     IMPATIENT = "impatient"
+    WITH_SMALL_BAG = "with_small_bag"      # 携带小包
+    WITH_LUGGAGE = "with_luggage"          # 携带拉杆箱
+    WITH_LARGE_LUGGAGE = "with_large_luggage"  # 携带大行李
 
 
 # 行人类型参数配置 (基于文献)
@@ -63,6 +66,27 @@ PEDESTRIAN_TYPE_PARAMS = {
         'reaction_time': 0.3,
         'radius': 0.3,
         'color': 'red',
+    },
+    PedestrianType.WITH_SMALL_BAG: {
+        'desired_speed': 1.2,
+        'speed_std': 0.2,
+        'reaction_time': 0.5,
+        'radius': 0.35,
+        'color': 'cyan',
+    },
+    PedestrianType.WITH_LUGGAGE: {
+        'desired_speed': 0.9,
+        'speed_std': 0.15,
+        'reaction_time': 0.6,
+        'radius': 0.5,
+        'color': 'orange',
+    },
+    PedestrianType.WITH_LARGE_LUGGAGE: {
+        'desired_speed': 0.7,
+        'speed_std': 0.1,
+        'reaction_time': 0.7,
+        'radius': 0.6,
+        'color': 'purple',
     },
 }
 
