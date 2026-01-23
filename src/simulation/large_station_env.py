@@ -797,19 +797,19 @@ class LargeStationEnv(gym.Env):
         evacuated_this_step = 0
         evacuation_radius = 3.0
 
-        peds_to_remove = []
+        peds_to_remove_ids = set()
 
         for ped in self.sfm.pedestrians:
             for exit_obj in self.exits:
                 dist = np.linalg.norm(ped.position - exit_obj.position)
                 if dist < evacuation_radius:
-                    peds_to_remove.append(ped)
+                    peds_to_remove_ids.add(ped.id)
                     self.evacuated_by_exit[exit_obj.id] += 1
                     evacuated_this_step += 1
                     break
 
-        for ped in peds_to_remove:
-            self.sfm.pedestrians.remove(ped)
+        # 用id过滤，避免numpy数组比较问题
+        self.sfm.pedestrians = [p for p in self.sfm.pedestrians if p.id not in peds_to_remove_ids]
 
         self.evacuated_count += evacuated_this_step
         return evacuated_this_step
