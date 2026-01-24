@@ -367,13 +367,16 @@ def save_report(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 保存详细结果
-    results_file = output_dir / "detailed_results.json"
+    # 时间戳（与pipeline日志格式一致）
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # 保存详细结果（带时间戳）
+    results_file = output_dir / f"detailed_results_{timestamp}.json"
     with open(results_file, "w", encoding="utf-8") as f:
         json.dump([asdict(r) for r in results], f, indent=2, ensure_ascii=False)
 
-    # 保存汇总
-    summary_file = output_dir / "comparison_report.json"
+    # 保存汇总（带时间戳）
+    summary_file = output_dir / f"comparison_report_{timestamp}.json"
     report = {
         "generated_at": datetime.now().isoformat(),
         "methods": {k: v for k, v in METHODS.items()},
@@ -382,9 +385,15 @@ def save_report(
     with open(summary_file, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
 
-    print(f"\n报告已保存:")
-    print(f"  详细结果: {results_file}")
-    print(f"  汇总报告: {summary_file}")
+    # 同时保存一份latest版本（方便pipeline检查）
+    latest_file = output_dir / "comparison_report.json"
+    with open(latest_file, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+
+    print(f"\nReports saved:")
+    print(f"  Detailed: {results_file}")
+    print(f"  Summary:  {summary_file}")
+    print(f"  Latest:   {latest_file}")
 
 
 def main():
