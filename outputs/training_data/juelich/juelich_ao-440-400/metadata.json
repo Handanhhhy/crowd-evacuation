@@ -1,0 +1,18 @@
+{
+  "source_file": "data/raw/juelich/bottleneck/ao-440-400.txt",
+  "format": "juelich",
+  "n_frames": 360,
+  "n_pedestrians": 350,
+  "scene_bounds": {
+    "x_min": -3.19077,
+    "x_max": 4.95885,
+    "y_min": -7.20244,
+    "y_max": 8.99415
+  },
+  "cell_size": 1.012286875,
+  "target_fps": 10.0,
+  "grid_size": [
+    30,
+    16
+  ]
+}
