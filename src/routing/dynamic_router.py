@@ -5,7 +5,7 @@
 1. 距离分数 - 越近越好
 2. 拥堵分数 - 越空越好
 3. 负载均衡 - 各出口均匀分配
-4. 预测分数 - 预测未来拥堵（后续集成密度预测模块）
+4. 预测分数 - 预测未来拥堵（集成密度预测模块）
 
 参考文档: docs/new_station_plan.md 6.4节
 """
@@ -13,6 +13,12 @@
 import numpy as np
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
+
+
+# 网格常量（与密度预测模块一致）
+GRID_SIZE = (30, 16)          # 网格尺寸 (width, height)
+CELL_SIZE = 5.0               # 单元格大小 (m)
+MAX_SAFE_DENSITY = 4.0        # 最大安全密度 (人/m²)
 
 
 @dataclass
@@ -24,6 +30,7 @@ class ExitInfo:
     current_load: int = 0
     density: float = 0.0
     congestion: float = 0.0
+    predicted_density: float = 0.0  # 预测密度（由密度预测模块更新）
 
 
 class DynamicRouter:
@@ -90,8 +97,82 @@ class DynamicRouter:
             exit_info.current_load = exit_loads.get(exit_info.id, 0)
 
     def set_predicted_densities(self, predicted: Dict[str, float]):
-        """设置预测密度（由密度预测模块调用）"""
+        """设置预测密度（由密度预测模块调用）
+        
+        Args:
+            predicted: {exit_id: predicted_density} 各出口预测密度
+        """
         self.predicted_densities = predicted
+        
+        # 同时更新出口对象的预测密度
+        for exit_info in self.exits:
+            if exit_info.id in predicted:
+                exit_info.predicted_density = predicted[exit_info.id]
+    
+    def set_predicted_densities_from_grid(
+        self,
+        predicted_grid: np.ndarray,
+        radius: int = 2,
+    ):
+        """从网格预测结果设置各出口的预测密度
+        
+        Args:
+            predicted_grid: [30, 16] 预测密度网格（归一化值）
+            radius: 出口周围的网格半径
+        """
+        predicted = {}
+        
+        for exit_info in self.exits:
+            # 出口位置转网格坐标
+            i = int(exit_info.position[0] / CELL_SIZE)
+            j = int(exit_info.position[1] / CELL_SIZE)
+            i = max(0, min(i, GRID_SIZE[0] - 1))
+            j = max(0, min(j, GRID_SIZE[1] - 1))
+            
+            # 计算周围区域的平均密度
+            densities = []
+            for di in range(-radius, radius + 1):
+                for dj in range(-radius, radius + 1):
+                    ni, nj = i + di, j + dj
+                    if 0 <= ni < GRID_SIZE[0] and 0 <= nj < GRID_SIZE[1]:
+                        densities.append(predicted_grid[ni, nj])
+            
+            if densities:
+                avg_density = float(np.mean(densities))
+            else:
+                avg_density = 0.0
+            
+            predicted[exit_info.id] = avg_density
+            exit_info.predicted_density = avg_density
+        
+        self.predicted_densities = predicted
+    
+    def get_high_density_exits(
+        self,
+        threshold: float = 0.75,
+        use_prediction: bool = True,
+    ) -> List[str]:
+        """获取高密度出口列表
+        
+        Args:
+            threshold: 密度阈值（归一化值）
+            use_prediction: 是否使用预测密度
+            
+        Returns:
+            高密度出口ID列表
+        """
+        high_density_exits = []
+        
+        for exit_info in self.exits:
+            if use_prediction and self.predicted_densities:
+                density = self.predicted_densities.get(exit_info.id, exit_info.density)
+            else:
+                density = exit_info.density
+            
+            if density > threshold:
+                high_density_exits.append(exit_info.id)
+        
+        return high_density_exits
 
     def compute_exit_scores(
         self,

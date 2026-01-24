@@ -1,3 +1,3 @@
-from .dynamic_router import DynamicRouter
+from .dynamic_router import DynamicRouter, ExitInfo, EvacuationRules
 
-__all__ = ['DynamicRouter']
+__all__ = ['DynamicRouter', 'ExitInfo', 'EvacuationRules']
