@@ -3,14 +3,17 @@
 密度场预测模型训练脚本
 
 步骤：
-1. 运行SFM仿真收集数据（多个episode）
+1. 运行SFM仿真收集数据（多个episode）或从真实轨迹数据转换
 2. 构建序列数据集
 3. 训练ConvLSTM
 4. 保存模型到 outputs/models/density_predictor.pt
 
 使用方法:
-    # 收集数据并训练
+    # 收集数据并训练（仿真数据）
     python scripts/train_density_predictor.py --collect-data --train
+    
+    # 使用Jülich真实数据
+    python scripts/train_density_predictor.py --collect-data --train --data-source juelich
     
     # 仅收集数据
     python scripts/train_density_predictor.py --collect-data --n-episodes 20
@@ -20,6 +23,10 @@
     
     # 评估模型
     python scripts/train_density_predictor.py --evaluate --model-path outputs/models/density_predictor.pt
+
+支持的数据源:
+    - simulation: SFM仿真数据（默认）
+    - juelich: Jülich瓶颈实验数据
 
 参考文档: docs/new_station_plan.md 密度场预测模块 TODO
 """
@@ -45,6 +52,8 @@ from prediction import (
     DensityDataCollector,
     DensityPredictorNet,
     DensityPredictorLite,
+    TrajectoryToDensityConverter,
+    convert_juelich_data,
     GRID_SIZE,
     CELL_SIZE,
     MAX_SAFE_DENSITY,
@@ -230,6 +239,92 @@ def collect_training_data(
     
     print("\n" + "=" * 60)
     print("数据收集完成")
+    stats = collector.get_statistics()
+    print(f"  - Episodes: {stats['n_episodes']}")
+    print(f"  - 总帧数: {stats['total_frames']}")
+    print("=" * 60)
+    
+    return collector
+
+
+def collect_juelich_data(
+    input_dir: str = "data/raw/juelich/bottleneck",
+    save_dir: str = "outputs/training_data/juelich",
+    target_fps: float = 10.0,
+) -> DensityDataCollector:
+    """收集Jülich真实轨迹数据
+    
+    Args:
+        input_dir: Jülich数据目录
+        save_dir: 保存目录
+        target_fps: 目标帧率（与SFM对齐）
+        
+    Returns:
+        DensityDataCollector: 数据收集器（包含加载的episodes）
+    """
+    print("=" * 60)
+    print("转换Jülich轨迹数据")
+    print("=" * 60)
+    
+    input_path = Path(input_dir)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Jülich数据目录不存在: {input_dir}")
+    
+    # 查找轨迹文件
+    txt_files = sorted(input_path.glob("*.txt"))
+    if not txt_files:
+        raise FileNotFoundError(f"未找到轨迹文件: {input_dir}")
+    
+    print(f"\n配置:")
+    print(f"  - 输入目录: {input_dir}")
+    print(f"  - 找到文件: {len(txt_files)} 个")
+    print(f"  - 目标帧率: {target_fps} FPS")
+    print(f"  - 数据保存: {save_dir}")
+    
+    # 检查已转换的数据
+    save_path = Path(save_dir)
+    existing_episodes = []
+    if save_path.exists():
+        for ep_dir in sorted(save_path.iterdir()):
+            if ep_dir.is_dir() and (ep_dir / "frames.pkl").exists():
+                existing_episodes.append(ep_dir.name)
+    
+    if existing_episodes:
+        print(f"\n🔄 发现已转换的数据:")
+        print(f"  - 已有episodes: {len(existing_episodes)}")
+        
+        # 询问是否重新转换（默认使用已有数据）
+        # 这里默认使用已有数据，如需重新转换可删除目录
+        print(f"  - 使用已有数据，如需重新转换请删除 {save_dir}")
+        
+        # 创建collector并加载数据
+        exits = [{'id': f'exit_{i}', 'position': np.array([0, 0])} for i in range(4)]
+        collector = DensityDataCollector(exits=exits, save_dir=save_dir)
+        collector.load_all_episodes()
+        
+        return collector
+    
+    # 创建转换器
+    converter = TrajectoryToDensityConverter(
+        data_format='juelich',
+        grid_size=GRID_SIZE,
+        target_fps=target_fps,
+    )
+    
+    # 转换所有文件
+    print("\n开始转换...")
+    episodes = converter.convert_files(txt_files, save_dir)
+    
+    if not episodes:
+        raise ValueError("转换失败，没有生成任何episode")
+    
+    # 创建collector并加载数据
+    exits = [{'id': f'exit_{i}', 'position': np.array([0, 0])} for i in range(4)]
+    collector = DensityDataCollector(exits=exits, save_dir=save_dir)
+    collector.load_all_episodes()
+    
+    print("\n" + "=" * 60)
+    print("数据转换完成")
     stats = collector.get_statistics()
     print(f"  - Episodes: {stats['n_episodes']}")
     print(f"  - 总帧数: {stats['total_frames']}")
@@ -566,7 +661,14 @@ def main():
     parser.add_argument("--train", action="store_true", help="训练模型")
     parser.add_argument("--evaluate", action="store_true", help="评估模型")
     
-    # 数据收集参数
+    # 数据源选择
+    parser.add_argument("--data-source", type=str, default="simulation",
+                        choices=["simulation", "juelich"],
+                        help="数据源: simulation(SFM仿真) 或 juelich(真实轨迹)")
+    parser.add_argument("--juelich-dir", type=str, default="data/raw/juelich/bottleneck",
+                        help="Jülich数据目录（当--data-source=juelich时使用）")
+    
+    # 数据收集参数（仿真数据）
     parser.add_argument("--n-episodes", type=int, default=10, help="收集的episode数量")
     parser.add_argument("--flow-level", type=str, default="small", 
                         choices=["small", "medium", "large"], help="人流量等级")
@@ -621,17 +723,31 @@ def main():
         args.collect_data = True
         args.train = True
     
+    # 根据数据源设置默认数据目录
+    if args.data_source == 'juelich':
+        if args.data_dir == "outputs/training_data":
+            args.data_dir = "outputs/training_data/juelich"
+    
     # 收集数据
     if args.collect_data:
-        collect_training_data(
-            n_episodes=args.n_episodes,
-            flow_level=args.flow_level,
-            max_steps=args.max_steps,
-            save_dir=args.data_dir,
-            collect_interval=args.collect_interval,
-            use_gpu_sfm=args.use_gpu_sfm,
-            resume=args.resume,
-        )
+        if args.data_source == 'simulation':
+            # SFM仿真数据
+            collect_training_data(
+                n_episodes=args.n_episodes,
+                flow_level=args.flow_level,
+                max_steps=args.max_steps,
+                save_dir=args.data_dir,
+                collect_interval=args.collect_interval,
+                use_gpu_sfm=args.use_gpu_sfm,
+                resume=args.resume,
+            )
+        elif args.data_source == 'juelich':
+            # Jülich真实轨迹数据
+            collect_juelich_data(
+                input_dir=args.juelich_dir,
+                save_dir=args.data_dir,
+                target_fps=10.0,  # 与SFM对齐
+            )
     
     # 训练
     if args.train:

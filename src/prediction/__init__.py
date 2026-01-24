@@ -17,6 +17,11 @@
 from .density_predictor import DensityFieldPredictor
 from .conv_lstm import ConvLSTMCell, ConvLSTM, DensityPredictorNet, DensityPredictorLite
 from .data_collector import DensityDataCollector
+from .trajectory_to_density import (
+    TrajectoryToDensityConverter,
+    convert_juelich_data,
+    DATASET_CONFIGS,
+)
 
 __all__ = [
     'DensityFieldPredictor',
@@ -25,6 +30,9 @@ __all__ = [
     'DensityPredictorNet',
     'DensityPredictorLite',
     'DensityDataCollector',
+    'TrajectoryToDensityConverter',
+    'convert_juelich_data',
+    'DATASET_CONFIGS',
 ]
 
 # 常量定义
