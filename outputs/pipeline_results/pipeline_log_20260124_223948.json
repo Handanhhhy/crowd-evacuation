@@ -1,0 +1,33 @@
+{
+  "pipeline_start": "2026-01-24T22:39:33.234835",
+  "mode": "quick",
+  "skip_ablation": false,
+  "steps": [
+    {
+      "step_id": 1,
+      "name": "density_predictor",
+      "description": "用Jülich真实数据训练密度预测模型",
+      "success": true,
+      "return_code": 0,
+      "duration_seconds": 13.507789,
+      "start_time": "2026-01-24T22:39:33.234896",
+      "end_time": "2026-01-24T22:39:46.742685",
+      "output_file": "outputs/models/density_predictor.pt",
+      "output_exists": true
+    },
+    {
+      "step_id": 2,
+      "name": "framework_comparison",
+      "description": "研究框架对比实验（5组方案）",
+      "success": false,
+      "return_code": 1,
+      "duration_seconds": 1.664733,
+      "start_time": "2026-01-24T22:39:46.743194",
+      "end_time": "2026-01-24T22:39:48.407927",
+      "output_file": "outputs/framework_comparison/comparison_report.json",
+      "output_exists": false
+    }
+  ],
+  "pipeline_end": "2026-01-24T22:39:48.408136",
+  "total_duration_seconds": 15.172522
+}

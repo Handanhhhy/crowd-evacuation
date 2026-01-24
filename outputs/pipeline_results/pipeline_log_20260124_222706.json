@@ -1,0 +1,33 @@
+{
+  "pipeline_start": "2026-01-24T22:26:51.363940",
+  "mode": "quick",
+  "skip_ablation": false,
+  "steps": [
+    {
+      "step_id": 1,
+      "name": "density_predictor",
+      "description": "用Jülich真实数据训练密度预测模型",
+      "success": true,
+      "return_code": 0,
+      "duration_seconds": 15.150627,
+      "start_time": "2026-01-24T22:26:51.364072",
+      "end_time": "2026-01-24T22:27:06.514699",
+      "output_file": "outputs/models/density_predictor.pt",
+      "output_exists": true
+    },
+    {
+      "step_id": 2,
+      "name": "ppo_training",
+      "description": "训练PPO大站策略（小流量）",
+      "success": false,
+      "return_code": 1,
+      "duration_seconds": 0.066961,
+      "start_time": "2026-01-24T22:27:06.514927",
+      "end_time": "2026-01-24T22:27:06.581888",
+      "output_file": "outputs/models/ppo_large_station_small.zip",
+      "output_exists": false
+    }
+  ],
+  "pipeline_end": "2026-01-24T22:27:06.582312",
+  "total_duration_seconds": 15.217588
+}

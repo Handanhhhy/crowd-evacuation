@@ -1,0 +1,57 @@
+{
+  "pipeline_start": "2026-01-24T23:43:13.704939",
+  "mode": "quick",
+  "skip_ablation": true,
+  "steps": [
+    {
+      "step_id": 1,
+      "name": "density_predictor",
+      "description": "用Jülich真实数据训练密度预测模型",
+      "success": true,
+      "return_code": 0,
+      "duration_seconds": 15.617606,
+      "start_time": "2026-01-24T23:43:13.705056",
+      "end_time": "2026-01-24T23:43:29.322662",
+      "output_file": "outputs/models/density_predictor.pt",
+      "output_exists": true
+    },
+    {
+      "step_id": 2,
+      "name": "framework_comparison",
+      "description": "研究框架对比实验（5组方案）",
+      "success": true,
+      "return_code": 0,
+      "duration_seconds": 356.77671,
+      "start_time": "2026-01-24T23:43:29.323026",
+      "end_time": "2026-01-24T23:49:26.099736",
+      "output_file": "outputs/framework_comparison/comparison_report.json",
+      "output_exists": true
+    },
+    {
+      "step_id": 4,
+      "name": "ppo_training",
+      "description": "训练PPO大站策略（小流量，CPU耗时长）",
+      "success": true,
+      "return_code": 0,
+      "duration_seconds": 2351.721818,
+      "start_time": "2026-01-24T23:49:26.100166",
+      "end_time": "2026-01-25T00:28:37.821984",
+      "output_file": "outputs/models/ppo_large_station_small.zip",
+      "output_exists": true
+    },
+    {
+      "step_id": 5,
+      "name": "generalization_test",
+      "description": "验证跨规模泛化性（小/中/大流量）",
+      "success": true,
+      "return_code": 0,
+      "duration_seconds": 1502.076596,
+      "start_time": "2026-01-25T00:28:37.822302",
+      "end_time": "2026-01-25T00:53:39.898898",
+      "output_file": null,
+      "output_exists": true
+    }
+  ],
+  "pipeline_end": "2026-01-25T00:53:39.899043",
+  "total_duration_seconds": 4226.19273
+}

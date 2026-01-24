@@ -1,0 +1,21 @@
+{
+  "pipeline_start": "2026-01-24T22:38:47.515806",
+  "mode": "normal",
+  "skip_ablation": false,
+  "steps": [
+    {
+      "step_id": 2,
+      "name": "framework_comparison",
+      "description": "研究框架对比实验（5组方案）",
+      "success": false,
+      "return_code": 1,
+      "duration_seconds": 1.892969,
+      "start_time": "2026-01-24T22:38:47.515919",
+      "end_time": "2026-01-24T22:38:49.408888",
+      "output_file": "outputs/framework_comparison/comparison_report.json",
+      "output_exists": false
+    }
+  ],
+  "pipeline_end": "2026-01-24T22:38:49.409233",
+  "total_duration_seconds": 1.892969
+}

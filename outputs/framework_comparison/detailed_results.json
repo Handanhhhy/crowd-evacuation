@@ -1,0 +1,50 @@
+[
+  {
+    "method": "baseline_sfm",
+    "flow_level": "small",
+    "episode": 0,
+    "evacuation_rate": 0.935,
+    "evacuation_time": 167.3,
+    "max_density": 0.6366197723675814,
+    "avg_density": 0.3009008278539539,
+    "exit_load_variance": 0.0,
+    "congestion_events": 0,
+    "crush_risk_events": 0
+  },
+  {
+    "method": "baseline_sfm",
+    "flow_level": "small",
+    "episode": 1,
+    "evacuation_rate": 0.946,
+    "evacuation_time": 160.60000000000002,
+    "max_density": 0.6366197723675814,
+    "avg_density": 0.3049313573435628,
+    "exit_load_variance": 0.0,
+    "congestion_events": 0,
+    "crush_risk_events": 0
+  },
+  {
+    "method": "sfm_full",
+    "flow_level": "small",
+    "episode": 0,
+    "evacuation_rate": 0.944,
+    "evacuation_time": 163.5,
+    "max_density": 0.6366197723675814,
+    "avg_density": 0.29270881582711267,
+    "exit_load_variance": 0.0,
+    "congestion_events": 0,
+    "crush_risk_events": 0
+  },
+  {
+    "method": "sfm_full",
+    "flow_level": "small",
+    "episode": 1,
+    "evacuation_rate": 0.951,
+    "evacuation_time": 161.5,
+    "max_density": 0.6366197723675814,
+    "avg_density": 0.31727513268381236,
+    "exit_load_variance": 0.0,
+    "congestion_events": 0,
+    "crush_risk_events": 0
+  }
+]

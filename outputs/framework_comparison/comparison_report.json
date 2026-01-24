@@ -1,0 +1,70 @@
+{
+  "generated_at": "2026-01-24T23:49:25.812525",
+  "methods": {
+    "baseline_sfm": {
+      "name": "原始SFM",
+      "description": "基线社会力模型，无额外引导",
+      "use_density_prediction": false,
+      "use_dynamic_routing": false,
+      "use_ppo_guidance": false
+    },
+    "sfm_prediction": {
+      "name": "SFM+密度预测",
+      "description": "SFM + ConvLSTM密度预测",
+      "use_density_prediction": true,
+      "use_dynamic_routing": false,
+      "use_ppo_guidance": false
+    },
+    "sfm_routing": {
+      "name": "SFM+动态分流",
+      "description": "SFM + 规则引擎动态分流",
+      "use_density_prediction": false,
+      "use_dynamic_routing": true,
+      "use_ppo_guidance": false
+    },
+    "sfm_full": {
+      "name": "SFM+预测+分流",
+      "description": "完整方案：SFM + 密度预测 + 动态分流",
+      "use_density_prediction": true,
+      "use_dynamic_routing": true,
+      "use_ppo_guidance": false
+    },
+    "sfm_ppo": {
+      "name": "SFM+PPO引导",
+      "description": "SFM + PPO强化学习引导（对比方案）",
+      "use_density_prediction": false,
+      "use_dynamic_routing": false,
+      "use_ppo_guidance": true
+    }
+  },
+  "summaries": [
+    {
+      "method": "baseline_sfm",
+      "flow_level": "small",
+      "n_episodes": 2,
+      "evacuation_rate_mean": 0.9405,
+      "evacuation_rate_std": 0.005499999999999949,
+      "evacuation_time_mean": 163.95000000000002,
+      "evacuation_time_std": 3.3499999999999943,
+      "max_density_mean": 0.6366197723675814,
+      "max_density_std": 0.0,
+      "exit_load_variance_mean": 0.0,
+      "congestion_events_mean": 0.0,
+      "crush_risk_events_mean": 0.0
+    },
+    {
+      "method": "sfm_full",
+      "flow_level": "small",
+      "n_episodes": 2,
+      "evacuation_rate_mean": 0.9475,
+      "evacuation_rate_std": 0.003500000000000003,
+      "evacuation_time_mean": 162.5,
+      "evacuation_time_std": 1.0,
+      "max_density_mean": 0.6366197723675814,
+      "max_density_std": 0.0,
+      "exit_load_variance_mean": 0.0,
+      "congestion_events_mean": 0.0,
+      "crush_risk_events_mean": 0.0
+    }
+  ]
+}
