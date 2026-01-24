@@ -127,9 +127,15 @@ class DensityDataCollector:
                 
                 distance_field[i, j] = min_dist
         
-        max_dist = np.max(distance_field[np.isfinite(distance_field)])
-        if max_dist > 0:
-            distance_field = distance_field / max_dist
+        valid_distances = distance_field[np.isfinite(distance_field)]
+        if len(valid_distances) > 0:
+            max_dist = np.max(valid_distances)
+            if max_dist > 0:
+                distance_field = distance_field / max_dist
+        else:
+            # 如果没有有效距离（例如没有出口），全设为1.0
+            distance_field[:] = 1.0
+            
         distance_field = np.clip(distance_field, 0.0, 1.0)
         
         return distance_field
@@ -205,6 +211,84 @@ class DensityDataCollector:
             density=density_grid,
             flow_x=flow_x_grid,
             flow_y=flow_y_grid,
+            exit_distance=self.exit_distance_field.copy(),
+            timestamp=timestamp,
+        )
+        
+        self.current_frames.append(field)
+        return field
+
+    def collect_frame_gpu(
+        self,
+        positions: torch.Tensor,
+        velocities: torch.Tensor,
+        timestamp: float,
+    ) -> DensityField:
+        """收集一帧数据（GPU加速版）
+        
+        直接利用PyTorch Tensor计算密度场，避免CPU-GPU传输和Python循环。
+        
+        Args:
+            positions: 位置张量 [N, 2]
+            velocities: 速度张量 [N, 2]
+            timestamp: 时间戳
+        """
+        grid_w, grid_h = self.grid_size
+        device = positions.device
+        
+        # 计算网格索引
+        # x_idx = floor(x / cell_size)
+        grid_indices = (positions / self.cell_size).long()
+        
+        # 过滤超出边界的点
+        mask = (grid_indices[:, 0] >= 0) & (grid_indices[:, 0] < grid_w) & \
+               (grid_indices[:, 1] >= 0) & (grid_indices[:, 1] < grid_h)
+        
+        valid_indices = grid_indices[mask]
+        valid_velocities = velocities[mask]
+        
+        # 初始化网格张量
+        density_grid = torch.zeros((grid_w, grid_h), device=device)
+        flow_x_grid = torch.zeros((grid_w, grid_h), device=device)
+        flow_y_grid = torch.zeros((grid_w, grid_h), device=device)
+        count_grid = torch.zeros((grid_w, grid_h), device=device)
+        
+        if len(valid_indices) > 0:
+            # 使用 scatter_add 或类似操作聚合
+            # 这里为了简单，先把二维索引转为一维线性索引
+            linear_indices = valid_indices[:, 0] * grid_h + valid_indices[:, 1]
+            
+            # 统计人数
+            count_grid.view(-1).scatter_add_(0, linear_indices, torch.ones_like(linear_indices, dtype=torch.float))
+            
+            # 累加速度
+            flow_x_grid.view(-1).scatter_add_(0, linear_indices, valid_velocities[:, 0])
+            flow_y_grid.view(-1).scatter_add_(0, linear_indices, valid_velocities[:, 1])
+            
+            # 计算平均值和密度
+            cell_area = self.cell_size ** 2
+            has_ped = count_grid > 0
+            
+            # 密度 = 人数 / 面积 / 最大安全密度
+            density_grid[has_ped] = (count_grid[has_ped] / cell_area) / self.max_safe_density
+            density_grid = torch.clamp(density_grid, 0.0, 1.0)
+            
+            # 平均速度
+            flow_x_grid[has_ped] /= count_grid[has_ped]
+            flow_y_grid[has_ped] /= count_grid[has_ped]
+            
+            # 归一化速度
+            flow_x_grid = flow_x_grid / self.max_velocity
+            flow_y_grid = flow_y_grid / self.max_velocity
+            
+            flow_x_grid = torch.clamp(flow_x_grid, -1.0, 1.0) * 0.5 + 0.5
+            flow_y_grid = torch.clamp(flow_y_grid, -1.0, 1.0) * 0.5 + 0.5
+            
+        # 转回CPU numpy
+        field = DensityField(
+            density=density_grid.cpu().numpy(),
+            flow_x=flow_x_grid.cpu().numpy(),
+            flow_y=flow_y_grid.cpu().numpy(),
             exit_distance=self.exit_distance_field.copy(),
             timestamp=timestamp,
         )

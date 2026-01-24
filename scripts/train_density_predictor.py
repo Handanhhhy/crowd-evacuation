@@ -207,16 +207,24 @@ def collect_training_data(
             
             # 收集数据
             if step % collect_interval == 0:
-                # 获取行人数据
-                pedestrians = []
-                for ped in env.sfm.pedestrians:
-                    pedestrians.append({
-                        'position': ped.position.copy(),
-                        'velocity': ped.velocity.copy(),
-                    })
-                
                 timestamp = step * dt
-                collector.collect_frame(pedestrians, timestamp)
+                
+                if use_gpu_sfm and hasattr(env.sfm, '_positions_tensor'):
+                    # GPU加速收集: 直接使用Tensor
+                    collector.collect_frame_gpu(
+                        positions=env.sfm._positions_tensor,
+                        velocities=env.sfm._velocities_tensor,
+                        timestamp=timestamp
+                    )
+                else:
+                    # CPU收集
+                    pedestrians = []
+                    for ped in env.sfm.pedestrians:
+                        pedestrians.append({
+                            'position': ped.position.copy(),
+                            'velocity': ped.velocity.copy(),
+                        })
+                    collector.collect_frame(pedestrians, timestamp)
             
             step += 1
             pbar.update(1)

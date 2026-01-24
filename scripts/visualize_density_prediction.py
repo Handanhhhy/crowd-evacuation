@@ -193,6 +193,7 @@ class DensityFieldVisualizer:
         x_offset: int,
         y_offset: int,
         title: str,
+        font: pygame.font.Font = None,
     ):
         """绘制密度场
         
@@ -202,9 +203,12 @@ class DensityFieldVisualizer:
             x_offset: X偏移
             y_offset: Y偏移
             title: 标题
+            font: 字体
         """
+        if font is None:
+            font = pygame.font.Font(None, 16)
+        
         # 绘制标题
-        font = pygame.font.SysFont('Arial', 16)
         title_surface = font.render(title, True, TEXT_COLOR)
         screen.blit(title_surface, (x_offset + self.panel_width // 2 - title_surface.get_width() // 2, y_offset - 25))
         
@@ -237,10 +241,13 @@ class DensityFieldVisualizer:
         x_offset: int,
         y_offset: int,
         title: str,
+        font: pygame.font.Font = None,
     ):
         """绘制误差场"""
+        if font is None:
+            font = pygame.font.Font(None, 16)
+        
         # 绘制标题
-        font = pygame.font.SysFont('Arial', 16)
         title_surface = font.render(title, True, TEXT_COLOR)
         screen.blit(title_surface, (x_offset + self.panel_width // 2 - title_surface.get_width() // 2, y_offset - 25))
         
@@ -267,16 +274,16 @@ class DensityFieldVisualizer:
         y = self.panel_height + self.margin * 2
         
         info_lines = [
-            f"样本: {self.current_sample_idx + 1} / {len(self.samples)}",
-            f"状态: {'暂停' if self.paused else '播放'}",
-            f"显示模式: {'误差图' if self.show_error else '密度场'}",
+            f"Sample: {self.current_sample_idx + 1} / {len(self.samples)}",
+            f"Status: {'Paused' if self.paused else 'Playing'}",
+            f"Mode: {'Error Map' if self.show_error else 'Density Fields'}",
             "",
-            "控制:",
-            "  [空格] 暂停/播放",
-            "  [→] 下一帧",
-            "  [←] 上一帧",
-            "  [E] 切换误差图",
-            "  [ESC] 退出",
+            "Controls:",
+            "  [Space] Pause/Play",
+            "  [Right] Next Sample",
+            "  [Left] Previous Sample",
+            "  [E] Toggle Error Map",
+            "  [ESC] Exit",
         ]
         
         for i, line in enumerate(info_lines):
@@ -294,12 +301,12 @@ class DensityFieldVisualizer:
             
             stats_x = self.panel_width * 3 + self.margin * 2
             stats_lines = [
-                "统计信息:",
-                f"当前密度 (最大): {current_max:.3f}",
-                f"预测密度 (最大): {pred_max:.3f}",
-                f"真实密度 (最大): {true_max:.3f}",
-                f"平均误差: {error_mean:.4f}",
-                f"最大误差: {error_max:.4f}",
+                "Statistics:",
+                f"Current Max Density: {current_max:.3f}",
+                f"Predicted Max Density: {pred_max:.3f}",
+                f"True Max Density: {true_max:.3f}",
+                f"Mean Error: {error_mean:.4f}",
+                f"Max Error: {error_max:.4f}",
             ]
             
             for i, line in enumerate(stats_lines):
@@ -326,7 +333,8 @@ class DensityFieldVisualizer:
                 sample['error'],
                 panel_x,
                 panel_y,
-                "预测误差",
+                "Prediction Error",
+                font,
             )
             
             self._draw_density_field(
@@ -334,7 +342,8 @@ class DensityFieldVisualizer:
                 sample['predicted'],
                 panel_x + self.panel_width + self.margin,
                 panel_y,
-                "预测密度",
+                "Predicted Density",
+                font,
             )
             
             self._draw_density_field(
@@ -342,7 +351,8 @@ class DensityFieldVisualizer:
                 sample['true'],
                 panel_x + (self.panel_width + self.margin) * 2,
                 panel_y,
-                "真实密度",
+                "Ground Truth",
+                font,
             )
         else:
             # 显示密度场模式
@@ -351,7 +361,8 @@ class DensityFieldVisualizer:
                 sample['current'],
                 panel_x,
                 panel_y,
-                "当前密度 (输入)",
+                "Current Density (Input)",
+                font,
             )
             
             self._draw_density_field(
@@ -359,7 +370,8 @@ class DensityFieldVisualizer:
                 sample['predicted'],
                 panel_x + self.panel_width + self.margin,
                 panel_y,
-                "预测密度 (5秒后)",
+                "Predicted Density (5s later)",
+                font,
             )
             
             self._draw_density_field(
@@ -367,7 +379,8 @@ class DensityFieldVisualizer:
                 sample['true'],
                 panel_x + (self.panel_width + self.margin) * 2,
                 panel_y,
-                "真实密度 (5秒后)",
+                "Ground Truth (5s later)",
+                font,
             )
         
         # 绘制信息面板
@@ -393,23 +406,21 @@ class DensityFieldVisualizer:
         """运行可视化"""
         pygame.init()
         screen = pygame.display.set_mode((self.window_width, self.window_height))
-        pygame.display.set_caption("密度场预测可视化")
+        pygame.display.set_caption("Density Field Prediction Visualization")
         clock = pygame.time.Clock()
         
-        try:
-            font = pygame.font.SysFont('Arial', 14)
-        except:
-            font = pygame.font.Font(None, 14)
+        # 使用系统默认字体而不是中文字体，避免编码问题
+        font = pygame.font.Font(None, 14)
         
         print("\n" + "=" * 60)
-        print("密度场预测可视化")
+        print("Density Field Prediction Visualization")
         print("=" * 60)
-        print("控制:")
-        print("  [空格] 暂停/播放")
-        print("  [→] 下一帧")
-        print("  [←] 上一帧")
-        print("  [E] 切换误差图")
-        print("  [ESC] 退出")
+        print("Controls:")
+        print("  [Space] Pause/Play")
+        print("  [Right Arrow] Next Sample")
+        print("  [Left Arrow] Previous Sample")
+        print("  [E] Toggle Error Map")
+        print("  [ESC] Exit")
         print("=" * 60 + "\n")
         
         frame_count = 0
@@ -429,17 +440,17 @@ class DensityFieldVisualizer:
             clock.tick(60)
         
         pygame.quit()
-        print("\n可视化已退出")
+        print("\nVisualization closed")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="密度场预测可视化")
+    parser = argparse.ArgumentParser(description="Density Field Prediction Visualization")
     parser.add_argument("--model-path", type=str, default="outputs/models/density_predictor.pt",
-                        help="模型路径")
+                        help="Model path")
     parser.add_argument("--data-dir", type=str, default="outputs/training_data",
-                        help="数据目录")
-    parser.add_argument("--lite", action="store_true", help="使用轻量级模型")
-    parser.add_argument("--cell-size", type=int, default=20, help="每个网格的像素大小")
+                        help="Data directory")
+    parser.add_argument("--lite", action="store_true", help="Use lite model")
+    parser.add_argument("--cell-size", type=int, default=20, help="Pixel size for each grid cell")
     
     args = parser.parse_args()
     
