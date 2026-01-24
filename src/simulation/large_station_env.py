@@ -537,10 +537,11 @@ class LargeStationEnv(gym.Env):
 
         # T形区域内的生成区
         spawn_areas = [
-            {"bounds": (25, 55, 145, 68), "weight": 0.3},   # 上部走廊
-            {"bounds": (25, 12, 145, 23), "weight": 0.3},   # 下部走廊
-            {"bounds": (25, 28, 145, 52), "weight": 0.3},   # 中间区域
-            {"bounds": (2, 20, 18, 60), "weight": 0.1},     # 左侧走廊
+            {"bounds": (25, 55, 145, 68), "weight": 0.25},   # 上部走廊
+            {"bounds": (25, 12, 145, 23), "weight": 0.25},   # 下部走廊
+            {"bounds": (25, 28, 145, 52), "weight": 0.30},   # 中间区域
+            {"bounds": (2, 20, 18, 60), "weight": 0.10},     # 左侧走廊 (闸机a)
+            {"bounds": (132, 20, 148, 60), "weight": 0.10},  # 右侧走廊 (闸机子)
         ]
 
         for i in range(self.upper_layer_count):
@@ -577,10 +578,11 @@ class LargeStationEnv(gym.Env):
 
         # T形区域内的生成区
         spawn_areas = [
-            {"bounds": (25, 55, 145, 68), "weight": 0.3},
-            {"bounds": (25, 12, 145, 23), "weight": 0.3},
-            {"bounds": (25, 28, 145, 52), "weight": 0.3},
-            {"bounds": (2, 20, 18, 60), "weight": 0.1},
+            {"bounds": (25, 55, 145, 68), "weight": 0.25},   # 上部走廊
+            {"bounds": (25, 12, 145, 23), "weight": 0.25},   # 下部走廊
+            {"bounds": (25, 28, 145, 52), "weight": 0.30},   # 中间区域
+            {"bounds": (2, 20, 18, 60), "weight": 0.10},     # 左侧走廊 (闸机a)
+            {"bounds": (132, 20, 148, 60), "weight": 0.10},  # 右侧走廊 (闸机子)
         ]
 
         # 预分配数组
@@ -1269,12 +1271,17 @@ class LargeStationEnv(gym.Env):
         if action < 0 or action >= len(self.exits):
             return
 
-        # 优化版暂不支持精细引导
-        if self.use_optimized_gpu_sfm:
-            return
-
         recommended_exit = self.exits[action]
 
+        if self.use_optimized_gpu_sfm:
+            # GPU版本：批量更新目标
+            self._apply_guidance_gpu(recommended_exit)
+        else:
+            # CPU版本：原有逻辑
+            self._apply_guidance_cpu(recommended_exit)
+
+    def _apply_guidance_cpu(self, recommended_exit):
+        """CPU版本的引导策略"""
         for ped in self.sfm.pedestrians:
             if ped.guidance_count >= 2:
                 continue
@@ -1293,6 +1300,68 @@ class LargeStationEnv(gym.Env):
             if rec_congestion < current_congestion - 0.1:
                 ped.target = recommended_exit.position.copy()
                 ped.guidance_count += 1
+
+    def _apply_guidance_gpu(self, recommended_exit):
+        """GPU版本的引导策略 - 批量更新目标"""
+        import torch
+
+        # 获取活跃行人数量
+        n_active = self.sfm.get_active_count()
+        if n_active == 0:
+            return
+
+        # 获取当前位置和目标（GPU张量）
+        positions = self.sfm.positions
+        targets = self.sfm.targets
+        is_active = self.sfm.is_active
+
+        # 计算各出口当前负载（目标指向该出口的行人数）
+        exit_loads = torch.zeros(len(self.exits), device=positions.device)
+        exit_positions = []
+        for i, exit_obj in enumerate(self.exits):
+            exit_pos = torch.tensor(exit_obj.position, device=positions.device, dtype=torch.float32)
+            exit_positions.append(exit_pos)
+            # 计算目标在该出口5m内的活跃行人数
+            dist = torch.norm(targets - exit_pos, dim=1)
+            exit_loads[i] = ((dist < 5.0) & is_active).sum()
+
+        # 找到推荐出口的索引和位置
+        rec_idx = self.exits.index(recommended_exit)
+        rec_pos = exit_positions[rec_idx]
+        rec_load = exit_loads[rec_idx]
+
+        # 遍历其他出口，将超载出口的部分行人引导到推荐出口
+        for i, exit_obj in enumerate(self.exits):
+            if i == rec_idx:
+                continue
+            if exit_loads[i] <= rec_load:
+                continue  # 当前出口负载不高于推荐出口，不需要切换
+
+            exit_pos = exit_positions[i]
+
+            # 找到目标指向该出口的活跃行人
+            dist_to_exit = torch.norm(targets - exit_pos, dim=1)
+            mask = (dist_to_exit < 5.0) & is_active
+
+            if not mask.any():
+                continue
+
+            # 计算这些行人到推荐出口和当前出口的距离
+            dist_to_rec = torch.norm(positions - rec_pos, dim=1)
+            dist_to_current = torch.norm(positions - exit_pos, dim=1)
+
+            # 切换条件：
+            # 1. 负载比 > 1.2（当前出口超载20%以上）
+            # 2. 距离推荐出口不超过当前出口的1.5倍（避免引导到太远的出口）
+            load_ratio = exit_loads[i] / (rec_load + 1)
+            should_switch = mask & (load_ratio > 1.2) & (dist_to_rec < dist_to_current * 1.5)
+
+            # 更新目标
+            if should_switch.any():
+                targets[should_switch] = rec_pos
+
+        # 更新sfm的目标张量
+        self.sfm.targets = targets
 
     def _find_nearest_exit(self, position: np.ndarray) -> int:
         """找到最近的出口索引"""
