@@ -1,0 +1,6 @@
+{
+  "episode": 2,
+  "flow_level": "large",
+  "max_steps": 3000,
+  "dt": 0.1
+}
