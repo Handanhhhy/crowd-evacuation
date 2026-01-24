@@ -46,6 +46,7 @@ from ml.data_loader import (
     collate_trajectories,
     compute_dataset_statistics
 )
+from utils.device_info import print_device_info, get_device as get_device_auto, print_device_selection
 
 
 def parse_args():
@@ -148,21 +149,9 @@ def load_config(config_path: str) -> Dict:
 
 def get_device(device_arg: str) -> torch.device:
     """Get appropriate device"""
-    if device_arg == 'auto':
-        if torch.cuda.is_available():
-            device = torch.device('cuda')
-            print(f"Using CUDA: {torch.cuda.get_device_name(0)}")
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            # MPS can be unstable, use CPU for reliability
-            device = torch.device('cpu')
-            print("MPS available but using CPU for stability")
-        else:
-            device = torch.device('cpu')
-            print("Using CPU")
-    else:
-        device = torch.device(device_arg)
-        print(f"Using device: {device}")
-    return device
+    device_str = get_device_auto(device_arg)
+    print_device_selection(device_str)
+    return torch.device(device_str)
 
 
 def train_epoch(
@@ -259,6 +248,9 @@ def evaluate(
 
 
 def main():
+    # 打印设备信息
+    print_device_info("系统设备信息")
+    
     args = parse_args()
 
     print("=" * 60)

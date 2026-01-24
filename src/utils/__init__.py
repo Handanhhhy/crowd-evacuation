@@ -6,3 +6,4 @@ from .experiment_logger import (
     ExperimentResult,
     EpisodeMetrics
 )
+from .device_info import print_device_info, get_device, print_device_selection

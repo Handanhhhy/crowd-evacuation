@@ -32,6 +32,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from simulation.metro_evacuation_env import MetroEvacuationEnv
+from utils.device_info import print_device_info, get_device as get_device_auto, print_device_selection
 
 
 def get_trajectory_device():
@@ -40,16 +41,8 @@ def get_trajectory_device():
     Returns:
         str: 'cuda' (NVIDIA GPU), 'mps' (Apple Silicon), 或 'cpu'
     """
-    if torch.cuda.is_available():
-        device = "cuda"
-        gpu_name = torch.cuda.get_device_name(0)
-        print(f"轨迹预测使用 NVIDIA GPU: {gpu_name}")
-    elif torch.backends.mps.is_available():
-        device = "mps"
-        print("轨迹预测使用 Apple Silicon GPU (MPS)")
-    else:
-        device = "cpu"
-        print("轨迹预测使用 CPU")
+    device = get_device_auto("auto")
+    print_device_selection(device)
     return device
 
 
@@ -361,6 +354,9 @@ def demo_trained_model():
 
 if __name__ == "__main__":
     import argparse
+
+    # 打印设备信息
+    print_device_info("系统设备信息")
 
     parser = argparse.ArgumentParser(description="训练地铁站场景PPO模型")
     parser.add_argument("--demo", action="store_true", help="演示训练好的模型")

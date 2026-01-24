@@ -16,6 +16,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from simulation.evacuation_env import EvacuationEnv
+from utils.device_info import print_device_info, get_device, print_device_selection
 
 
 class TrainingCallback(BaseCallback):
@@ -38,6 +39,13 @@ class TrainingCallback(BaseCallback):
 
 def train_ppo():
     """训练 PPO 模型"""
+    
+    # 打印设备信息
+    print_device_info("系统设备信息")
+    
+    # 检测设备
+    device = get_device("auto")
+    print_device_selection(device)
 
     print("=" * 50)
     print("PPO 疏散策略优化训练")
@@ -69,7 +77,7 @@ def train_ppo():
         gae_lambda=0.95,
         clip_range=0.2,
         verbose=1,
-        device="cpu"  # Mac 上用 CPU，如有 MPS 可改为 "mps"
+        device=device  # 使用自动检测的设备
     )
 
     # 训练

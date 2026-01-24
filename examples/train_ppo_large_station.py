@@ -39,20 +39,13 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from simulation.large_station_env import LargeStationEnv
+from utils.device_info import print_device_info, get_device as get_device_auto, print_device_selection
 
 
 def get_device():
     """自动检测最佳设备"""
-    if torch.cuda.is_available():
-        device = "cuda"
-        gpu_name = torch.cuda.get_device_name(0)
-        print(f"使用 NVIDIA GPU: {gpu_name}")
-    elif torch.backends.mps.is_available():
-        device = "mps"
-        print("使用 Apple Silicon GPU (MPS)")
-    else:
-        device = "cpu"
-        print("使用 CPU")
+    device = get_device_auto("auto")
+    print_device_selection(device)
     return device
 
 
@@ -380,6 +373,9 @@ def scale_test(model_path: str, flow_levels: List[str] = None):
 
 if __name__ == "__main__":
     import argparse
+
+    # 打印设备信息
+    print_device_info("系统设备信息")
 
     parser = argparse.ArgumentParser(description="训练大型地铁站场景PPO模型")
     parser.add_argument("--flow-level", default="small",

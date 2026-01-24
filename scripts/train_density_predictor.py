@@ -59,7 +59,8 @@ def collect_training_data(
     max_steps: int = 3000,
     save_dir: str = "outputs/training_data",
     dt: float = 0.1,
-    collect_interval: int = 1,
+    collect_interval: int = 5,
+    use_gpu_sfm: bool = True,
 ) -> DensityDataCollector:
     """收集训练数据
     
@@ -69,7 +70,8 @@ def collect_training_data(
         max_steps: 每个episode最大步数
         save_dir: 数据保存目录
         dt: 仿真时间步长
-        collect_interval: 数据收集间隔（每N步收集一次）
+        collect_interval: 数据收集间隔（每N步收集一次，默认5步=0.5秒）
+        use_gpu_sfm: 是否使用GPU加速SFM（大幅提升速度）
         
     Returns:
         DensityDataCollector: 数据收集器
@@ -81,7 +83,33 @@ def collect_training_data(
     print(f"  - Episodes: {n_episodes}")
     print(f"  - 人流等级: {flow_level}")
     print(f"  - 最大步数: {max_steps}")
-    print(f"  - 收集间隔: 每{collect_interval}步")
+    print(f"  - 收集间隔: 每{collect_interval}步 ({collect_interval * dt:.1f}秒)")
+    print(f"  - GPU加速SFM: {use_gpu_sfm}")
+    
+    # 性能估算
+    flow_config = {
+        "small": 1000,
+        "medium": 2000,
+        "large": 3000,
+    }
+    n_peds = flow_config.get(flow_level, 1000)
+    
+    # 估算每步时间（CPU约2-3秒/步，GPU约0.1-0.3秒/步）
+    if use_gpu_sfm:
+        est_time_per_step = 0.2  # GPU加速
+        speed_note = "GPU加速"
+    else:
+        est_time_per_step = 2.5  # CPU
+        speed_note = "CPU（建议使用--use-gpu-sfm加速）"
+    
+    total_steps = n_episodes * max_steps
+    est_total_time = total_steps * est_time_per_step / 3600  # 小时
+    
+    print(f"\n性能估算 ({speed_note}):")
+    print(f"  - 预计每步时间: ~{est_time_per_step:.1f}秒")
+    print(f"  - 预计总时间: ~{est_total_time:.1f}小时")
+    if not use_gpu_sfm:
+        print(f"  - 💡 提示: 使用 --use-gpu-sfm 可提速10-20倍！")
     print()
     
     # 创建环境
@@ -90,6 +118,7 @@ def collect_training_data(
         max_steps=max_steps,
         dt=dt,
         emergency_mode=True,
+        use_gpu_sfm=use_gpu_sfm,
     )
     
     # 提取出口信息
@@ -496,6 +525,12 @@ def main():
     parser.add_argument("--flow-level", type=str, default="small", 
                         choices=["small", "medium", "large"], help="人流量等级")
     parser.add_argument("--max-steps", type=int, default=3000, help="每个episode最大步数")
+    parser.add_argument("--collect-interval", type=int, default=5, 
+                        help="数据收集间隔（每N步收集一次，默认5步=0.5秒）")
+    parser.add_argument("--use-gpu-sfm", action="store_true", default=True,
+                        help="使用GPU加速SFM（大幅提升速度，默认启用）")
+    parser.add_argument("--no-gpu-sfm", dest="use_gpu_sfm", action="store_false",
+                        help="禁用GPU加速SFM（使用CPU，较慢）")
     
     # 训练参数
     parser.add_argument("--epochs", type=int, default=50, help="训练轮数")
@@ -545,6 +580,8 @@ def main():
             flow_level=args.flow_level,
             max_steps=args.max_steps,
             save_dir=args.data_dir,
+            collect_interval=args.collect_interval,
+            use_gpu_sfm=args.use_gpu_sfm,
         )
     
     # 训练

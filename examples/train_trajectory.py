@@ -27,6 +27,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from ml.trajectory_predictor import SocialLSTM, trajectory_loss, compute_ade_fde
+from utils.device_info import print_device_info, get_device, print_device_selection
 
 
 class TrajectoryDataset(Dataset):
@@ -339,6 +340,9 @@ def evaluate(
 
 
 def main():
+    # 打印设备信息
+    print_device_info("系统设备信息")
+    
     print("=" * 60)
     print("Social-LSTM 轨迹预测模型训练")
     print("=" * 60)
@@ -356,15 +360,16 @@ def main():
         'learning_rate': 1e-3,
         'batch_size': 8,
         'epochs': 50,
-        'device': 'cuda' if torch.cuda.is_available() else 'cpu'
+        'device': get_device('auto')
     }
 
     print("\n训练配置:")
     for key, value in config.items():
         print(f"  {key}: {value}")
 
-    device = torch.device(config['device'])
-    print(f"\n使用设备: {device}")
+    device_str = config['device']
+    device = torch.device(device_str)
+    print_device_selection(device_str)
 
     # 数据路径
     data_path = project_root / "data" / "raw" / "eth_ucy" / "synthetic_eth.txt"
