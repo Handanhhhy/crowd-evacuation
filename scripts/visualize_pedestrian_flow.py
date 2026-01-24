@@ -1,9 +1,33 @@
 #!/usr/bin/env python
 """
-行人疏散仿真可视化 (Pygame)
+Pedestrian Evacuation Simulation Visualization (Pygame)
 
-实时运行 LargeStationEnv 并在 Pygame 中展示。
-参考 examples/plot_large_station_layout.py 的视觉风格。
+Run LargeStationEnv in real-time with Pygame visualization.
+Supports 5 methods from the research framework (see docs/new_station_plan.md 6.1).
+
+Usage:
+    # Baseline (random action)
+    python scripts/visualize_pedestrian_flow.py --flow medium --method baseline
+
+    # SFM + Density Prediction
+    python scripts/visualize_pedestrian_flow.py --method prediction
+
+    # SFM + Dynamic Routing
+    python scripts/visualize_pedestrian_flow.py --method routing
+
+    # SFM + Prediction + Routing (Full method)
+    python scripts/visualize_pedestrian_flow.py --method full
+
+    # SFM + PPO Guidance
+    python scripts/visualize_pedestrian_flow.py --method ppo
+    python scripts/visualize_pedestrian_flow.py --model outputs/models/ppo_large_station_small.zip
+
+5 Methods:
+    baseline   - Baseline SFM (random action)
+    prediction - SFM + Density Prediction
+    routing    - SFM + Dynamic Routing (load balancing)
+    full       - SFM + Prediction + Routing (complete method)
+    ppo        - SFM + PPO Guidance (RL-based)
 """
 
 import sys
@@ -47,32 +71,46 @@ PED_COLORS = {
 }
 
 class StationVisualizer:
-    def __init__(self, flow_level="medium", scale=8.0):
+    def __init__(self, flow_level="medium", scale=8.0, model_path=None, method="baseline"):
         self.scale = scale
         self.margin = 50
-        
-        # 初始化环境
-        print(f"初始化环境 (流量: {flow_level})...")
+        self.method = method
+        self.model = None
+
+        # Initialize environment
+        print(f"Initializing environment (flow: {flow_level}, method: {method})...")
         self.env = LargeStationEnv(
             flow_level=flow_level,
             use_gpu_sfm=True,  # 尝试使用GPU
             render_mode=None
         )
         self.env.reset()
-        
-        # 场景尺寸
+
+        # 场景尺寸（必须在加载模型前设置）
         self.scene_w, self.scene_h = self.env.scene_width, self.env.scene_height
-        
+
         # 窗口尺寸
         self.width = int(self.scene_w * scale) + self.margin * 2
         self.height = int(self.scene_h * scale) + self.margin * 2
-        
+
+        # Load PPO model (if specified)
+        if model_path or method == "ppo":
+            self._load_model(model_path)
+            # Fallback to 'full' method if model not found
+            if self.model is None:
+                print("Fallback to 'full' method (SFM+Prediction+Routing)")
+                self.method = "full"
+
         # 状态
         self.running = True
         self.paused = False
         self.step_count = 0
-        self.fps = 0
-        
+
+        # 统计信息
+        self.total_evacuated = 0
+        self.max_density = 0
+        self.evacuation_start_time = time.time()
+
         # 缓存墙壁数据（转为屏幕坐标）
         self.walls_screen = []
         walls = []
@@ -80,12 +118,58 @@ class StationVisualizer:
             walls = self.env.sfm.walls
         elif hasattr(self.env.sfm, 'obstacles'):
             walls = self.env.sfm.obstacles
-            
+
         for wall in walls:
             if hasattr(wall, 'cpu'): wall = wall.cpu().numpy()
             start = self.world_to_screen(wall[0])
             end = self.world_to_screen(wall[1])
             self.walls_screen.append((start, end))
+
+    def _load_model(self, model_path=None):
+        """Load PPO model"""
+        if model_path is None:
+            # Default model path
+            model_path = project_root / "outputs/models/ppo_large_station_small.zip"
+        else:
+            model_path = Path(model_path)
+
+        if model_path.exists():
+            try:
+                from stable_baselines3 import PPO
+                self.model = PPO.load(str(model_path))
+                print(f"Loaded PPO model: {model_path}")
+            except Exception as e:
+                print(f"Warning: Cannot load PPO model ({e})")
+                self.model = None
+        else:
+            print(f"Note: Model file not found ({model_path})")
+
+    def _get_action(self, obs):
+        """根据方案选择动作"""
+        if self.method == "ppo" and self.model is not None:
+            # PPO模型预测
+            action, _ = self.model.predict(obs, deterministic=True)
+            return action
+        elif self.method in ["routing", "full", "prediction"]:
+            # 动态分流：选择负载最小的出口
+            # prediction和full方案也使用分流（密度预测集成在环境中）
+            return self._routing_action()
+        else:
+            # 基线：随机动作
+            return self.env.action_space.sample()
+
+    def _routing_action(self):
+        """动态分流策略：选择负载最小的出口"""
+        n_exits = self.env.action_space.n
+
+        if hasattr(self.env, 'evacuated_by_exit') and self.env.evacuated_by_exit:
+            loads = np.array([self.env.evacuated_by_exit.get(i, 0) for i in range(n_exits)])
+        else:
+            loads = np.zeros(n_exits)
+
+        # 选择负载最小的出口（添加小扰动避免总选同一个）
+        scores = -loads + np.random.uniform(0, 0.1, n_exits)
+        return int(np.argmax(scores))
 
     def world_to_screen(self, pos):
         """世界坐标(米) -> 屏幕坐标(像素)"""
@@ -404,24 +488,105 @@ class StationVisualizer:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE: self.running = False
                     elif event.key == pygame.K_SPACE: self.paused = not self.paused
-                    elif event.key == pygame.K_r: self.env.reset()
+                    elif event.key == pygame.K_r:
+                        self.env.reset()
+                        self.step_count = 0
+                        self.total_evacuated = 0
+                        self.max_density = 0
+                        self.evacuation_start_time = time.time()
+                        print("Environment reset")
+                    # Number keys 1-5 to switch methods
+                    elif event.key == pygame.K_1:
+                        self.method = "baseline"
+                        print("Switched to: Baseline SFM")
+                    elif event.key == pygame.K_2:
+                        self.method = "prediction"
+                        print("Switched to: SFM+Prediction")
+                    elif event.key == pygame.K_3:
+                        self.method = "routing"
+                        print("Switched to: SFM+Routing")
+                    elif event.key == pygame.K_4:
+                        self.method = "full"
+                        print("Switched to: SFM+Pred+Route (Full)")
+                    elif event.key == pygame.K_5:
+                        if self.model is not None:
+                            self.method = "ppo"
+                            print("Switched to: SFM+PPO")
+                        else:
+                            print("PPO model not loaded, cannot switch to PPO method")
             
             # 2. 物理更新
             if not self.paused:
-                # 随机动作（对于Social Force Model，动作通常由模型内部处理，这里只是驱动step）
-                action = self.env.action_space.sample() 
-                self.env.step(action)
+                # 获取观测并选择动作
+                obs = self.env._get_observation()
+                action = self._get_action(obs)
+                _, reward, done, truncated, info = self.env.step(action)
                 self.step_count += 1
-            
+
+                # 更新统计
+                self.total_evacuated = info.get('evacuated', 0)
+                self.max_density = max(self.max_density, info.get('max_density', 0))
+
+                # 检查是否完成
+                if done or truncated:
+                    elapsed = time.time() - self.evacuation_start_time
+                    evac_rate = self.total_evacuated / self.env.n_pedestrians * 100
+                    print(f"\nEvacuation complete! Rate: {evac_rate:.1f}%, Time: {elapsed:.1f}s, Max density: {self.max_density:.2f}/m2")
+
             # 3. 渲染
             screen.fill(COLORS['bg'])
             self.draw_structure(screen, font)
             self.draw_pedestrians(screen)
-            
+
             # 4. UI信息
-            info = f"Step: {self.step_count} | Pedestrians: {len(self.env.sfm.pedestrians) if hasattr(self.env.sfm, 'pedestrians') else len(self.env.sfm._positions_tensor)} | FPS: {clock.get_fps():.1f}"
-            info_surf = font.render(info, True, COLORS['text'])
+            if hasattr(self.env.sfm, 'pedestrians'):
+                n_peds = len(self.env.sfm.pedestrians)
+            else:
+                n_peds = self.env.sfm.get_active_count() if hasattr(self.env.sfm, 'get_active_count') else 0
+
+            evac_rate = self.total_evacuated / self.env.n_pedestrians * 100 if self.env.n_pedestrians > 0 else 0
+            sim_time = self.step_count * self.env.dt
+
+            # Method names (English to avoid font issues)
+            method_names = {
+                "baseline": "Baseline SFM",
+                "prediction": "SFM+Prediction",
+                "routing": "SFM+Routing",
+                "full": "SFM+Pred+Route",
+                "ppo": "SFM+PPO"
+            }
+            method_name = method_names.get(self.method, self.method)
+
+            # Line 1: Basic info
+            line1 = f"Method: {method_name} | Time: {sim_time:.1f}s | FPS: {clock.get_fps():.1f}"
+            info_surf = font.render(line1, True, COLORS['text'])
             screen.blit(info_surf, (10, 10))
+
+            # Line 2: Evacuation info
+            line2 = f"Remaining: {n_peds} | Evacuated: {self.total_evacuated}/{self.env.n_pedestrians} ({evac_rate:.1f}%) | Max Density: {self.max_density:.2f}/m2"
+            info_surf2 = font.render(line2, True, COLORS['text'])
+            screen.blit(info_surf2, (10, 30))
+
+            # Line 3: Method selector (highlight current in RED)
+            method_keys = [("1", "baseline"), ("2", "prediction"), ("3", "routing"), ("4", "full"), ("5", "ppo")]
+            x_offset = 10
+            for key, m in method_keys:
+                if m == self.method:
+                    # Selected: RED + UPPERCASE
+                    text = f"[{key}]{m.upper()}"
+                    color = (220, 20, 60)  # Crimson red
+                else:
+                    # Not selected: gray
+                    text = f"[{key}]{m}"
+                    color = (128, 128, 128)
+                surf = font.render(text, True, color)
+                screen.blit(surf, (x_offset, 50))
+                x_offset += surf.get_width() + 15  # spacing between items
+
+            # Line 4: Controls (at bottom)
+            line4 = "[Space] Pause  [R] Reset  [Esc] Quit"
+            info_surf4 = font.render(line4, True, (128, 128, 128))
+            screen.blit(info_surf4, (10, self.height - 25))
             
             pygame.display.flip()
             clock.tick(30) # 限制30FPS
@@ -431,9 +596,43 @@ class StationVisualizer:
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--flow", default="medium", choices=["small", "medium", "large"])
+    parser = argparse.ArgumentParser(
+        description="Pedestrian Evacuation Simulation Visualization",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Methods (5 from research framework):
+  baseline   - Baseline SFM with random action
+  prediction - SFM + Density Prediction
+  routing    - SFM + Dynamic Routing (load balancing)
+  full       - SFM + Prediction + Routing (complete method)
+  ppo        - SFM + PPO Guidance (requires trained model)
+
+Examples:
+  python scripts/visualize_pedestrian_flow.py --flow medium
+  python scripts/visualize_pedestrian_flow.py --method full --flow large
+  python scripts/visualize_pedestrian_flow.py --method ppo --model outputs/models/ppo_large_station_small.zip
+        """
+    )
+    parser.add_argument("--flow", default="medium", choices=["small", "medium", "large"],
+                        help="Flow level: small/medium/large (default: medium)")
+    parser.add_argument("--model", type=str, default=None,
+                        help="PPO model path (auto-enables ppo method)")
+    parser.add_argument("--method", default="baseline",
+                        choices=["baseline", "prediction", "routing", "full", "ppo"],
+                        help="Method: baseline/prediction/routing/full/ppo (default: baseline)")
+    parser.add_argument("--scale", type=float, default=8.0,
+                        help="Display scale factor (default: 8.0)")
     args = parser.parse_args()
-    
-    viz = StationVisualizer(flow_level=args.flow)
+
+    # If model path is specified, auto-enable ppo method
+    method = args.method
+    if args.model:
+        method = "ppo"
+
+    viz = StationVisualizer(
+        flow_level=args.flow,
+        scale=args.scale,
+        model_path=args.model,
+        method=method
+    )
     viz.run()
