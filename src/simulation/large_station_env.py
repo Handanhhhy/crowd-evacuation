@@ -41,6 +41,17 @@ try:
 except ImportError:
     GPU_SFM_AVAILABLE = False
 
+# GPU优化版社会力模型
+try:
+    from sfm.social_force_gpu_optimized import (
+        GPUSocialForceModelOptimized,
+        PedestrianData,
+        PEDESTRIAN_TYPE_PARAMS as GPU_PED_PARAMS,
+    )
+    GPU_SFM_OPTIMIZED_AVAILABLE = True
+except ImportError:
+    GPU_SFM_OPTIMIZED_AVAILABLE = False
+
 
 # ========== 默认配置 ==========
 DEFAULT_REWARD_WEIGHTS = {
@@ -147,6 +158,7 @@ class LargeStationEnv(gym.Env):
         enable_enhanced_behaviors: bool = True,
         reward_weights: Optional[Dict[str, float]] = None,
         use_gpu_sfm: bool = False,
+        use_optimized_gpu_sfm: bool = True,  # 使用优化版GPU SFM
         sfm_device: str = "auto",
         emergency_mode: bool = True,
         config_path: Optional[str] = None,
@@ -180,6 +192,7 @@ class LargeStationEnv(gym.Env):
 
         # GPU配置
         self.use_gpu_sfm = use_gpu_sfm and GPU_SFM_AVAILABLE
+        self.use_optimized_gpu_sfm = use_optimized_gpu_sfm and GPU_SFM_OPTIMIZED_AVAILABLE
         self.sfm_device = sfm_device
 
         # 初始化场景设施
@@ -266,6 +279,10 @@ class LargeStationEnv(gym.Env):
 
     def _create_sfm(self):
         """创建社会力模型实例"""
+        # 优先使用优化版GPU SFM
+        if self.use_optimized_gpu_sfm:
+            return self._create_optimized_gpu_sfm()
+
         sfm_params = dict(
             tau=0.5,
             A=2000.0,
@@ -286,6 +303,28 @@ class LargeStationEnv(gym.Env):
         self._add_t_shape_walls(sfm)
         # 添加扶梯护栏
         self._add_escalator_barriers(sfm)
+
+        return sfm
+
+    def _create_optimized_gpu_sfm(self):
+        """创建优化版GPU社会力模型"""
+        sfm = GPUSocialForceModelOptimized(
+            device=self.sfm_device,
+            tau=0.5,
+            A=2000.0,
+            B=0.08,
+            wall_A=5000.0,
+            wall_B=0.1,
+            enable_perturbation=self.enable_enhanced_behaviors,
+            max_pedestrians=self.n_pedestrians + 1000,  # 预留扩展空间
+        )
+
+        # 添加T形边界墙
+        self._add_t_shape_walls(sfm)
+        # 添加扶梯护栏
+        self._add_escalator_barriers(sfm)
+        # 一次性同步障碍物到GPU
+        sfm.finalize_obstacles()
 
         return sfm
 
@@ -365,6 +404,10 @@ class LargeStationEnv(gym.Env):
 
     def _spawn_upper_layer(self):
         """生成上层初始行人"""
+        if self.use_optimized_gpu_sfm:
+            self._spawn_upper_layer_optimized()
+            return
+
         types = list(self.type_distribution.keys())
         probs = list(self.type_distribution.values())
         total = sum(probs)
@@ -403,6 +446,64 @@ class LargeStationEnv(gym.Env):
             )
             self.sfm.add_pedestrian(ped)
 
+    def _spawn_upper_layer_optimized(self):
+        """优化版：批量生成上层行人（一次性GPU传输）"""
+        import torch
+
+        types = list(self.type_distribution.keys())
+        probs = list(self.type_distribution.values())
+        total = sum(probs)
+        probs = [p / total for p in probs]
+
+        # T形区域内的生成区
+        spawn_areas = [
+            {"bounds": (25, 55, 145, 68), "weight": 0.3},
+            {"bounds": (25, 12, 145, 23), "weight": 0.3},
+            {"bounds": (25, 28, 145, 52), "weight": 0.3},
+            {"bounds": (2, 20, 18, 60), "weight": 0.1},
+        ]
+
+        # 预分配数组
+        n = self.upper_layer_count
+        positions = np.zeros((n, 2), dtype=np.float32)
+        velocities = np.zeros((n, 2), dtype=np.float32)
+        targets = np.zeros((n, 2), dtype=np.float32)
+        desired_speeds = np.zeros(n, dtype=np.float32)
+        radii = np.zeros(n, dtype=np.float32)
+        reaction_times = np.zeros(n, dtype=np.float32)
+
+        # 批量生成数据
+        area_weights = [a["weight"] for a in spawn_areas]
+        for i in range(n):
+            area_idx = np.random.choice(len(spawn_areas), p=area_weights)
+            x_min, y_min, x_max, y_max = spawn_areas[area_idx]["bounds"]
+
+            positions[i] = [
+                np.random.uniform(x_min, x_max),
+                np.random.uniform(y_min, y_max)
+            ]
+            targets[i] = self._select_initial_target(positions[i])
+
+            ped_type = np.random.choice(types, p=probs)
+            params = PEDESTRIAN_TYPE_PARAMS[ped_type]
+            desired_speeds[i] = params['desired_speed'] + np.random.normal(0, params['speed_std'] * 0.3)
+            radii[i] = params['radius']
+            reaction_times[i] = params['reaction_time']
+
+        # 一次性初始化到GPU
+        self.sfm.initialize_pedestrians(
+            positions=positions,
+            velocities=velocities,
+            targets=targets,
+            desired_speeds=desired_speeds,
+            radii=radii,
+            reaction_times=reaction_times,
+        )
+
+        # 创建出口位置张量（用于GPU疏散检测）
+        exit_pos = np.array([exit.position for exit in self.exits], dtype=np.float32)
+        self._exit_positions_gpu = torch.tensor(exit_pos, device=self.sfm.device)
+
     def _select_initial_target(self, position: np.ndarray) -> np.ndarray:
         """根据位置智能选择初始目标出口"""
         x, y = position
@@ -438,6 +539,9 @@ class LargeStationEnv(gym.Env):
 
     def _spawn_from_escalator(self):
         """从扶梯生成涌入行人"""
+        if self.use_optimized_gpu_sfm:
+            return self._spawn_from_escalator_optimized()
+
         if self.spawned_from_lower >= self.lower_layer_count:
             return 0
 
@@ -484,6 +588,92 @@ class LargeStationEnv(gym.Env):
 
         return spawned
 
+    def _spawn_from_escalator_optimized(self):
+        """优化版：从扶梯批量生成涌入行人"""
+        import torch
+
+        if self.spawned_from_lower >= self.lower_layer_count:
+            return 0
+
+        spawn_this_step = self.spawn_rate * self.dt
+        spawn_count = np.random.poisson(spawn_this_step)
+        spawn_count = min(spawn_count, self.lower_layer_count - self.spawned_from_lower)
+
+        if spawn_count <= 0:
+            return 0
+
+        types = list(self.type_distribution.keys())
+        probs = list(self.type_distribution.values())
+        total = sum(probs)
+        probs = [p / total for p in probs]
+
+        # 批量生成新行人数据
+        new_positions = np.zeros((spawn_count, 2), dtype=np.float32)
+        new_velocities = np.zeros((spawn_count, 2), dtype=np.float32)
+        new_targets = np.zeros((spawn_count, 2), dtype=np.float32)
+        new_desired_speeds = np.zeros(spawn_count, dtype=np.float32)
+        new_radii = np.zeros(spawn_count, dtype=np.float32)
+        new_reaction_times = np.zeros(spawn_count, dtype=np.float32)
+
+        for i in range(spawn_count):
+            esc = np.random.choice(self.escalators)
+            new_positions[i] = [
+                esc.position[0] + np.random.uniform(-2, 2),
+                esc.position[1] + np.random.uniform(-2, 2)
+            ]
+            new_targets[i] = self._select_initial_target(new_positions[i])
+
+            ped_type = np.random.choice(types, p=probs)
+            params = PEDESTRIAN_TYPE_PARAMS[ped_type]
+            new_desired_speeds[i] = params['desired_speed'] + np.random.normal(0, params['speed_std'] * 0.3)
+            new_radii[i] = params['radius']
+            new_reaction_times[i] = params['reaction_time']
+
+        # 追加到GPU张量
+        device = self.sfm.device
+        self.sfm.positions = torch.cat([
+            self.sfm.positions,
+            torch.tensor(new_positions, device=device, dtype=torch.float32)
+        ])
+        self.sfm.velocities = torch.cat([
+            self.sfm.velocities,
+            torch.tensor(new_velocities, device=device, dtype=torch.float32)
+        ])
+        self.sfm.targets = torch.cat([
+            self.sfm.targets,
+            torch.tensor(new_targets, device=device, dtype=torch.float32)
+        ])
+        self.sfm.desired_speeds = torch.cat([
+            self.sfm.desired_speeds,
+            torch.tensor(new_desired_speeds, device=device, dtype=torch.float32)
+        ])
+        self.sfm.radii = torch.cat([
+            self.sfm.radii,
+            torch.tensor(new_radii, device=device, dtype=torch.float32)
+        ])
+        self.sfm.reaction_times = torch.cat([
+            self.sfm.reaction_times,
+            torch.tensor(new_reaction_times, device=device, dtype=torch.float32)
+        ])
+        self.sfm.panic_factors = torch.cat([
+            self.sfm.panic_factors,
+            torch.zeros(spawn_count, device=device, dtype=torch.float32)
+        ])
+        self.sfm.is_waiting = torch.cat([
+            self.sfm.is_waiting,
+            torch.zeros(spawn_count, device=device, dtype=torch.bool)
+        ])
+        self.sfm.is_active = torch.cat([
+            self.sfm.is_active,
+            torch.ones(spawn_count, device=device, dtype=torch.bool)
+        ])
+
+        self.sfm.n_pedestrians += spawn_count
+        self.sfm._cpu_synced = False
+        self.spawned_from_lower += spawn_count
+
+        return spawn_count
+
     def reset(
         self,
         seed: Optional[int] = None,
@@ -526,6 +716,10 @@ class LargeStationEnv(gym.Env):
         [30-36] 7个涌入点密度 (5扶梯+2步梯)
         [37-40] 4个关键瓶颈区域密度
         """
+        # 优化版GPU SFM需要先同步到CPU
+        if self.use_optimized_gpu_sfm:
+            self.sfm.sync_to_cpu_pedestrians()
+
         total_peds = len(self.sfm.pedestrians)
 
         # === 出口相关 (24维) ===
@@ -661,6 +855,10 @@ class LargeStationEnv(gym.Env):
 
     def _detect_crush_risk(self) -> Tuple[float, int]:
         """检测踩踏风险"""
+        # 优化版使用采样检测，避免O(n^2)计算
+        if self.use_optimized_gpu_sfm:
+            return self._detect_crush_risk_optimized()
+
         detection_radius = 2.0
         critical_density = LARGE_SCALE_SAFETY["critical_density"]
         max_density = 0.0
@@ -682,8 +880,50 @@ class LargeStationEnv(gym.Env):
 
         return max_density, danger_count
 
+    def _detect_crush_risk_optimized(self) -> Tuple[float, int]:
+        """优化版：采样检测踩踏风险（避免O(n^2)）"""
+        import torch
+
+        detection_radius = 2.0
+        critical_density = LARGE_SCALE_SAFETY["critical_density"]
+
+        n_active = self.sfm.is_active.sum().item()
+        if n_active == 0:
+            return 0.0, 0
+
+        # 采样最多100个点进行检测
+        sample_size = min(100, n_active)
+        active_indices = torch.where(self.sfm.is_active)[0]
+        sample_indices = active_indices[torch.randperm(len(active_indices))[:sample_size]]
+
+        positions = self.sfm.positions
+        active_mask = self.sfm.is_active
+
+        max_density = 0.0
+        danger_count = 0
+
+        for idx in sample_indices:
+            pos = positions[idx]
+            dists = torch.norm(positions - pos, dim=1)
+            nearby_count = ((dists < detection_radius) & active_mask).sum().item() - 1
+            local_density = nearby_count / (np.pi * detection_radius ** 2)
+
+            if local_density > max_density:
+                max_density = local_density
+            if local_density > critical_density:
+                danger_count += 1
+
+        # 按采样比例估算总危险人数
+        if sample_size > 0:
+            danger_count = int(danger_count * n_active / sample_size)
+
+        return max_density, danger_count
+
     def _spread_panic(self) -> int:
         """恐慌传播"""
+        if self.use_optimized_gpu_sfm:
+            return self._spread_panic_optimized()
+
         spread_radius = LARGE_SCALE_SAFETY["panic_spread_radius"]
         spread_rate = LARGE_SCALE_SAFETY["panic_spread_rate"]
         affected_count = 0
@@ -705,6 +945,49 @@ class LargeStationEnv(gym.Env):
                     target.panic_factor = min(1.0, target.panic_factor + spread_strength * source.panic_factor)
                     if target.panic_factor > old_panic:
                         affected_count += 1
+
+        return affected_count
+
+    def _spread_panic_optimized(self) -> int:
+        """优化版：GPU上处理恐慌传播"""
+        import torch
+
+        spread_radius = LARGE_SCALE_SAFETY["panic_spread_radius"]
+        spread_rate = LARGE_SCALE_SAFETY["panic_spread_rate"]
+
+        # 找高恐慌源
+        panic_threshold = 0.3
+        panicked_mask = (self.sfm.panic_factors > panic_threshold) & self.sfm.is_active
+
+        n_panicked = panicked_mask.sum().item()
+        if n_panicked == 0:
+            return 0
+
+        # 限制源数量避免O(n^2)
+        max_sources = 50
+        if n_panicked > max_sources:
+            panicked_indices = torch.where(panicked_mask)[0]
+            panicked_indices = panicked_indices[torch.randperm(len(panicked_indices))[:max_sources]]
+        else:
+            panicked_indices = torch.where(panicked_mask)[0]
+
+        affected_count = 0
+        for src_idx in panicked_indices:
+            src_pos = self.sfm.positions[src_idx]
+            src_panic = self.sfm.panic_factors[src_idx].item()
+
+            dists = torch.norm(self.sfm.positions - src_pos, dim=1)
+            nearby_mask = (dists < spread_radius) & self.sfm.is_active
+            nearby_mask[src_idx] = False
+
+            if nearby_mask.any():
+                nearby_dists = dists[nearby_mask]
+                spread_strength = spread_rate * (1 - nearby_dists / spread_radius) * src_panic
+
+                old_panic = self.sfm.panic_factors[nearby_mask].clone()
+                new_panic = torch.clamp(old_panic + spread_strength, max=1.0)
+                self.sfm.panic_factors[nearby_mask] = new_panic
+                affected_count += (new_panic > old_panic).sum().item()
 
         return affected_count
 
@@ -732,8 +1015,14 @@ class LargeStationEnv(gym.Env):
         self.evacuation_rate_buffer.pop(0)
         self.evacuation_rate_buffer.append(evacuation_ratio)
 
+        # 获取剩余行人数
+        if self.use_optimized_gpu_sfm:
+            remaining_peds = self.sfm.get_active_count()
+        else:
+            remaining_peds = len(self.sfm.pedestrians)
+
         all_evacuated = (
-            len(self.sfm.pedestrians) == 0 and
+            remaining_peds == 0 and
             self.spawned_from_lower >= self.lower_layer_count
         )
         terminated = all_evacuated
@@ -742,7 +1031,7 @@ class LargeStationEnv(gym.Env):
         info = {
             'evacuated': self.evacuated_count,
             'evacuated_by_exit': self.evacuated_by_exit.copy(),
-            'remaining': len(self.sfm.pedestrians),
+            'remaining': remaining_peds,
             'spawned_from_lower': self.spawned_from_lower,
             'max_density': max_density,
             'danger_count': danger_count,
@@ -756,6 +1045,10 @@ class LargeStationEnv(gym.Env):
     def _apply_guidance(self, action: int):
         """应用PPO引导策略"""
         if action < 0 or action >= len(self.exits):
+            return
+
+        # 优化版暂不支持精细引导
+        if self.use_optimized_gpu_sfm:
             return
 
         recommended_exit = self.exits[action]
@@ -794,6 +1087,9 @@ class LargeStationEnv(gym.Env):
 
     def _process_evacuation(self) -> int:
         """处理疏散"""
+        if self.use_optimized_gpu_sfm:
+            return self._process_evacuation_optimized()
+
         evacuated_this_step = 0
         evacuation_radius = 3.0
 
@@ -813,6 +1109,16 @@ class LargeStationEnv(gym.Env):
 
         self.evacuated_count += evacuated_this_step
         return evacuated_this_step
+
+    def _process_evacuation_optimized(self) -> int:
+        """优化版：GPU上处理疏散"""
+        evacuation_radius = 3.0
+        evacuated = self.sfm.remove_pedestrians_near_exits(
+            self._exit_positions_gpu,
+            radius=evacuation_radius
+        )
+        self.evacuated_count += evacuated
+        return evacuated
 
     def _compute_reward(
         self,
