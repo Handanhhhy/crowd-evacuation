@@ -194,10 +194,24 @@ def train_model(
     print("训练密度预测模型")
     print("=" * 60)
     
-    # 设备
+    # 设备检测和打印
+    print("\n设备信息:")
+    print(f"  - PyTorch版本: {torch.__version__}")
+    print(f"  - CUDA可用: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"  - CUDA版本: {torch.version.cuda}")
+        print(f"  - GPU数量: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            print(f"  - GPU {i}: {torch.cuda.get_device_name(i)}")
+            print(f"    - 显存: {torch.cuda.get_device_properties(i).total_memory / 1024**3:.2f} GB")
+    
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"训练设备: {device}")
+    
+    print(f"\n  - 使用设备: {device}")
+    if device == "cuda":
+        print(f"  - 当前GPU: {torch.cuda.get_device_name(0)}")
+    print()
     
     # 加载数据
     # 首先创建一个临时的collector来获取exits信息
@@ -390,9 +404,23 @@ def evaluate_model(
     print("评估模型")
     print("=" * 60)
     
+    # 设备检测和打印
+    print("\n设备信息:")
+    print(f"  - PyTorch版本: {torch.__version__}")
+    print(f"  - CUDA可用: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"  - CUDA版本: {torch.version.cuda}")
+        print(f"  - GPU数量: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            print(f"  - GPU {i}: {torch.cuda.get_device_name(i)}")
+    
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"设备: {device}")
+    
+    print(f"\n  - 使用设备: {device}")
+    if device == "cuda":
+        print(f"  - 当前GPU: {torch.cuda.get_device_name(0)}")
+    print()
     
     # 加载模型
     if use_lite_model:
@@ -486,6 +514,24 @@ def main():
     parser.add_argument("--device", type=str, default="auto", help="计算设备")
     
     args = parser.parse_args()
+    
+    # 在开始时打印设备信息
+    print("\n" + "=" * 60)
+    print("系统设备信息")
+    print("=" * 60)
+    print(f"PyTorch版本: {torch.__version__}")
+    print(f"CUDA可用: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"CUDA版本: {torch.version.cuda}")
+        print(f"GPU数量: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(i)
+            print(f"  GPU {i}: {props.name}")
+            print(f"    显存: {props.total_memory / 1024**3:.2f} GB")
+            print(f"    计算能力: {props.major}.{props.minor}")
+    else:
+        print("  (将使用CPU进行训练)")
+    print("=" * 60 + "\n")
     
     # 默认行为：同时收集数据和训练
     if not args.collect_data and not args.train and not args.evaluate:
