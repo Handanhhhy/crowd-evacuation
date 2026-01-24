@@ -30,13 +30,12 @@ def test_performance():
         use_optimized_gpu_sfm=True,
         emergency_mode=True,
     )
-
-    print(f"  设备: {env.sfm.device}")
     print(f"  使用优化版GPU SFM: {env.use_optimized_gpu_sfm}")
 
-    # 重置环境
+    # 重置环境（此时创建SFM）
     print("\n重置环境...")
     obs, info = env.reset()
+    print(f"  设备: {env.sfm.device}")
     print(f"  初始观测维度: {obs.shape}")
     print(f"  初始行人数: {env.sfm.n_pedestrians}")
 
