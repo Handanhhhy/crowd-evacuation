@@ -4,9 +4,10 @@
 
 执行顺序：
 1. 用Jülich真实数据训练密度预测模型
-2. 训练PPO大站策略（小流量）
-3. 验证跨规模泛化性
-4. 运行消融实验（可选）
+2. 研究框架对比实验（5组方案对比）
+3. 消融实验（可选，17组对比）
+4. PPO训练（CPU耗时长，放最后）
+5. 泛化性验证
 
 使用方法:
     python scripts/run_full_pipeline.py
@@ -47,8 +48,35 @@ STEPS = [
     },
     {
         "id": 2,
+        "name": "framework_comparison",
+        "description": "研究框架对比实验（5组方案）",
+        "script": "examples/run_framework_comparison.py",
+        "args_normal": [
+            "--episodes", "10",
+        ],
+        "args_quick": [
+            "--episodes", "3",
+        ],
+        "output_file": "outputs/framework_comparison/comparison_report.json",
+    },
+    {
+        "id": 3,
+        "name": "ablation",
+        "description": "运行消融实验（17组对比）",
+        "script": "examples/run_ablation.py",
+        "args_normal": [
+            "--timesteps", "100000",
+        ],
+        "args_quick": [
+            "--timesteps", "10000",
+        ],
+        "output_file": "outputs/ablation/summary_report.json",
+        "skippable": True,  # 可以通过 --skip-ablation 跳过
+    },
+    {
+        "id": 4,
         "name": "ppo_training",
-        "description": "训练PPO大站策略（小流量）",
+        "description": "训练PPO大站策略（小流量，CPU耗时长）",
         "script": "examples/train_ppo_large_station.py",
         "args_normal": [
             "--flow-level", "small",
@@ -61,7 +89,7 @@ STEPS = [
         "output_file": "outputs/models/ppo_large_station_small.zip",
     },
     {
-        "id": 3,
+        "id": 5,
         "name": "generalization_test",
         "description": "验证跨规模泛化性（小/中/大流量）",
         "script": "examples/train_ppo_large_station.py",
@@ -70,20 +98,6 @@ STEPS = [
         ],
         "args_quick": None,  # 与normal相同
         "output_file": None,  # 结果打印到stdout
-    },
-    {
-        "id": 4,
-        "name": "ablation",
-        "description": "运行消融实验（17组对比）",
-        "script": "examples/run_ablation.py",
-        "args_normal": [
-            "--timesteps", "100000",
-        ],
-        "args_quick": [
-            "--timesteps", "10000",
-        ],
-        "output_file": "outputs/ablation/summary_report.json",
-        "skippable": True,  # 可以通过 --skip-ablation 跳过
     },
 ]
 
@@ -220,7 +234,7 @@ def main():
     parser.add_argument("--only-step", type=int, default=None,
                         help="只执行指定步骤")
     parser.add_argument("--skip-ablation", action="store_true",
-                        help="跳过消融实验（Step 4）")
+                        help="跳过消融实验（Step 3）")
     parser.add_argument("--quick", action="store_true",
                         help="快速模式（减少训练步数）")
 
