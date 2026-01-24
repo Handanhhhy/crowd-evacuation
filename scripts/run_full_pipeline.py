@@ -52,10 +52,10 @@ STEPS = [
         "description": "研究框架对比实验（5组方案）",
         "script": "examples/run_framework_comparison.py",
         "args_normal": [
-            "--episodes", "10",
+            "--episodes", "5",
         ],
         "args_quick": [
-            "--episodes", "3",
+            "--quick",  # baseline vs full, small flow, 2 episodes
         ],
         "output_file": "outputs/framework_comparison/comparison_report.json",
     },

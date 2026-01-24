@@ -407,40 +407,56 @@ def main():
     )
 
     parser.add_argument("--episodes", "-n", type=int, default=5,
-                        help="每个方案每个流量等级的episode数 (默认5)")
+                        help="Episodes per method per flow level (default: 5)")
     parser.add_argument("--flow-levels", "-f", nargs="+",
                         default=["small", "medium", "large"],
                         choices=["small", "medium", "large"],
-                        help="测试的流量等级 (默认全部)")
+                        help="Flow levels to test (default: all)")
     parser.add_argument("--methods", "-m", nargs="+",
                         default=list(METHODS.keys()),
                         choices=list(METHODS.keys()),
-                        help="测试的方案 (默认全部)")
+                        help="Methods to test (default: all)")
     parser.add_argument("--output-dir", "-o", type=str,
                         default="outputs/framework_comparison",
-                        help="输出目录")
+                        help="Output directory")
+    parser.add_argument("--quick", "-q", action="store_true",
+                        help="Quick mode: baseline vs full, small flow, 2 episodes")
 
     args = parser.parse_args()
 
+    # Quick mode: only test baseline vs full, small flow, 2 episodes
+    if args.quick:
+        methods = ["baseline_sfm", "sfm_full"]
+        flow_levels = ["small"]
+        n_episodes = 2
+        print("=" * 60)
+        print("Quick Mode: baseline vs full comparison")
+        print("=" * 60)
+    else:
+        methods = args.methods
+        flow_levels = args.flow_levels
+        n_episodes = args.episodes
+        print("=" * 60)
+        print("Framework Comparison Experiments")
+        print("=" * 60)
+
     output_dir = PROJECT_ROOT / args.output_dir
 
-    print("=" * 60)
-    print("研究框架对比实验")
-    print("=" * 60)
-    print(f"方案数: {len(args.methods)}")
-    print(f"流量等级: {args.flow_levels}")
-    print(f"每组Episodes: {args.episodes}")
-    print(f"输出目录: {output_dir}")
+    print(f"Methods: {len(methods)}")
+    print(f"Flow levels: {flow_levels}")
+    print(f"Episodes per config: {n_episodes}")
+    print(f"Total experiments: {len(methods) * len(flow_levels) * n_episodes}")
+    print(f"Output: {output_dir}")
 
     all_results = []
 
-    for method_key in args.methods:
+    for method_key in methods:
         method_config = METHODS[method_key]
         results = run_method_experiments(
             method_key=method_key,
             method_config=method_config,
-            flow_levels=args.flow_levels,
-            n_episodes=args.episodes,
+            flow_levels=flow_levels,
+            n_episodes=n_episodes,
             output_dir=output_dir,
         )
         all_results.extend(results)
@@ -449,7 +465,7 @@ def main():
     summaries = compute_summary(all_results)
 
     # 打印对比表格
-    for flow_level in args.flow_levels:
+    for flow_level in flow_levels:
         print_comparison_table(summaries, flow_level)
 
     # 保存报告
