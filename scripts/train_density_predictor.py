@@ -456,7 +456,7 @@ def train_model(
     print("=" * 60)
     
     # 加载最佳模型
-    model.load_state_dict(torch.load(model_save_path, map_location=device))
+    model.load_state_dict(torch.load(model_save_path, map_location=device, weights_only=True))
     
     return model
 
@@ -503,7 +503,7 @@ def evaluate_model(
     else:
         model = DensityPredictorNet(input_channels=4, hidden_channels=64, grid_size=GRID_SIZE)
     
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model = model.to(device)
     model.eval()
     print(f"加载模型: {model_path}")

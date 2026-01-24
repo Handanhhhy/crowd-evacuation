@@ -1,0 +1,319 @@
+{
+    "title": "Pedestrian Dynamics Experiments Metadata",
+    "version": "2.0.0",
+    "experiment": {
+        "experiment_name": "Hermes_Messe_T_Junction_Open",
+        "title": "T-Junction",
+        "date_modified": "2024-02-29",
+        "date_created": "2009-05-12",
+        "date_published": "2009-01-01",
+        "publisher": "Forschungszentrum Jülich",
+        "about": "This experiment was performed to observe the dependence between the number of people and the corridor width. Additionally, the convergence of pedestrian streams was observed in a t-junction setup.",
+        "max_participant": 300,
+        "internal_storage": "smb://smb.its.kfa-juelich.de/ias-7_ped/experiments/2009.05.12_Duesseldorf_Messe_Hermes/",
+        "comment": "         ",
+        "funding": [
+            {
+                "number": "13N9952 - 13N9960",
+                "project_name": "Hermes",
+                "funder": "Federal Ministry of Education and Research (BMBF)"
+            },
+            {
+                "number": "POF1-400",
+                "project_name": "POF I",
+                "funder": "Forschungszentrum Jülich GmbH"
+            }
+        ],
+        "participants": [
+            {
+                "rolename": "random"
+            }
+        ],
+        "sensors": [
+            {
+                "category": "camera",
+                "model": "Bumblebee XB3 BBX3-13S2M",
+                "brand": "Point Grey (aquired by FLIR)"
+            }
+        ],
+        "publication": [
+            {
+                "doi": "10.34735/ped.2009.7"
+            }
+        ],
+        "persons": [
+            {
+                "given_name": "Armin",
+                "family_name": "Seyfried",
+                "orcid": "0000-0001-8888-0978",
+                "affiliations": [
+                    {
+                        "affiliation_name": "Forschungszentrum Jülich",
+                        "ror": "02nv7yv05"
+                    },
+                    {
+                        "affiliation_name": "University of Wuppertal",
+                        "ror": "00613ak93"
+                    }
+                ]
+            },
+            {
+                "given_name": "Maik",
+                "family_name": "Boltes",
+                "orcid": "0000-0001-7240-896X",
+                "affiliations": [
+                    {
+                        "affiliation_name": "Forschungszentrum Jülich",
+                        "ror": "02nv7yv05"
+                    }
+                ]
+            },
+            {
+                "given_name": "Stefan",
+                "family_name": "Holl",
+                "orcid": "                   ",
+                "affiliations": [
+                    {
+                        "affiliation_name": "Forschungszentrum Jülich",
+                        "ror": "02nv7yv05"
+                    }
+                ]
+            },
+            {
+                "given_name": "Tobias ",
+                "family_name": "Rupprecht",
+                "orcid": "                   ",
+                "affiliations": [
+                    {
+                        "affiliation_name": "University of Wuppertal",
+                        "ror": "00613ak93"
+                    }
+                ]
+            },
+            {
+                "given_name": "Andreas ",
+                "family_name": "Winkens",
+                "orcid": "                   ",
+                "affiliations": [
+                    {
+                        "affiliation_name": "University of Wuppertal",
+                        "ror": "00613ak93"
+                    }
+                ]
+            }
+        ],
+        "documentations": [
+            {
+                "name": "documentation",
+                "link": "smb://smb.its.kfa-juelich.de/ias-7_ped/experiments/2009.05.12_Duesseldorf_Messe_Hermes/docu/VersuchsdokumentationHERMES.pdf",
+                "about": ""
+            },
+            {
+                "name": "overview image",
+                "link": "smb://smb.its.kfa-juelich.de/ias-7_ped/experiments/2009.05.12_Duesseldorf_Messe_Hermes/docu/overview_image_t_junction.png",
+                "about": ""
+            },
+            {
+                "name": "setup_sketch",
+                "link": "smb://smb.its.kfa-juelich.de/ias-7_ped/experiments/2009.05.12_Duesseldorf_Messe_Hermes/docu/setup_sketch_t_junction.png",
+                "about": ""
+            }
+        ],
+        "affiliations": [
+            {
+                "affiliation_name": "University of Wuppertal",
+                "ror": "00613ak93"
+            },
+            {
+                "affiliation_name": "Forschungszentrum Jülich",
+                "ror": "02nv7yv05"
+            }
+        ],
+        "locations": [
+            {
+                "institution_name": "Messe Duesseldorf GmbH",
+                "street_address": "Stockumer Kirchstr. 61",
+                "postal_code": "40474",
+                "city": "Düsseldorf",
+                "state": "         ",
+                "country": "DE",
+                "building_name": "Hall 2"
+            }
+        ],
+        "run": [
+            {
+                "run_name": "ko-300-050-300",
+                "start_date": "2009-05-15",
+                "start_time": "14:08:00",
+                "number_participants": 140,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-3 0, -3 4, -4 4, -4 1, -7 1, -7 0, -3 0), (8 -1.75, 9 -1.75, 9 -2.75, 8 -2.75, 8 -1.75), (8 -1.25, 9 -1.25, 9 -0.25, 8 -0.25, 8 -1.25), (-10.4 -1.75, -10.4 -2.75, -11.4 -2.75, -11.4 -1.75, -10.4 -1.75), (-10.4 -1.25, -10.4 -0.25, -11.4 -0.25, -11.4 -1.25, -10.4 -1.25), (4 -3, 4 -4, -7 -4, -7 -3, 4 -3))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "0.5",
+                    "width entrance_2 [m]": "0.5",
+                    "width_corridor_1 [m]": "3",
+                    "width_corridor_2 [m]": "3"
+                },
+                "status": "published"
+            },
+            {
+                "run_name": "ko-300-080-300",
+                "start_date": "2009-05-15",
+                "start_time": "14:10:00",
+                "number_participants": 200,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-3 0, -3 4, -4 4, -4 1, -7 1, -7 0, -3 0), (8 -1.9, 9 -1.9, 9 -2.9, 8 -2.9, 8 -1.9), (8 -1.1, 9 -1.1, 9 -0.1, 8 -0.1, 8 -1.1), (-10.4 -1.9, -10.4 -2.9, -11.4 -2.9, -11.4 -1.9, -10.4 -1.9), (-10.4 -1.1, -10.4 -0.1, -11.4 -0.1, -11.4 -1.1, -10.4 -1.1), (4 -3, 4 -4, -7 -4, -7 -3, 4 -3))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "0.8",
+                    "width entrance_2 [m]": "0.8",
+                    "width_corridor_1 [m]": "3",
+                    "width_corridor_2 [m]": "3"
+                },
+                "status": "published"
+            },
+            {
+                "run_name": "ko-300-120-300",
+                "start_date": "2009-05-15",
+                "start_time": "14:12:00",
+                "number_participants": 300,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-3 0, -3 4, -4 4, -4 1, -7 1, -7 0, -3 0), (8 -2.1, 9 -2.1, 9 -3.1, 8 -3.1, 8 -2.1), (8 -0.9, 9 -0.9, 9 0.1, 8 0.1, 8 -0.9), (-10.4 -2.1, -10.4 -3.1, -11.4 -3.1, -11.4 -2.1, -10.4 -2.1), (-10.4 -0.9, -10.4 0.1, -11.4 0.1, -11.4 -0.9, -10.4 -0.9), (4 -3, 4 -4, -7 -4, -7 -3, 4 -3))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "1.2",
+                    "width entrance_2 [m]": "1.2",
+                    "width_corridor_1 [m]": "3",
+                    "width_corridor_2 [m]": "3"
+                },
+                "status": "published"
+            },
+            {
+                "run_name": "ko-300-150-300",
+                "start_date": "2009-05-15",
+                "start_time": "14:14:00",
+                "number_participants": 300,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-3 0, -3 4, -4 4, -4 1, -7 1, -7 0, -3 0), (8 -2.25, 9 -2.25, 9 -3.25, 8 -3.25, 8 -2.25), (8 -0.75, 9 -0.75, 9 0.25, 8 0.25, 8 -0.75), (-10.4 -2.25, -10.4 -3.25, -11.4 -3.25, -11.4 -2.25, -10.4 -2.25), (-10.4 -0.75, -10.4 0.25, -11.4 0.25, -11.4 -0.75, -10.4 -0.75), (4 -3, 4 -4, -7 -4, -7 -3, 4 -3))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "1.5",
+                    "width entrance_2 [m]": "1.5",
+                    "width_corridor_1 [m]": "3",
+                    "width_corridor_2 [m]": "3"
+                },
+                "status": "published"
+            },
+            {
+                "run_name": "ko-240-050-240",
+                "start_date": "2009-05-15",
+                "start_time": "14:20:00",
+                "number_participants": 100,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-2.4 0, -2.4 4, -3.4 4, -3.4 1, -6.4 1, -6.4 0, -2.4 0), (8 -1.45, 9 -1.45, 9 -2.45, 8 -2.45, 8 -1.45), (8 -0.95, 9 -0.95, 9 0.05, 8 0.05, 8 -0.95), (-10.4 -1.45, -10.4 -2.45, -11.4 -2.45, -11.4 -1.45, -10.4 -1.45), (-10.4 -0.95, -10.4 0.05, -11.4 0.05, -11.4 -0.95, -10.4 -0.95), (4 -2.4, 4 -3.4, -6.4 -3.4, -6.4 -2.4, 4 -2.4))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "0.5",
+                    "width entrance_2 [m]": "0.5",
+                    "width_corridor_1 [m]": "2.4",
+                    "width_corridor_2 [m]": "2.4"
+                },
+                "status": "published"
+            },
+            {
+                "run_name": "ko-240-060-240",
+                "start_date": "2009-05-15",
+                "start_time": "14:22:00",
+                "number_participants": 100,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-2.4 0, -2.4 4, -3.4 4, -3.4 1, -6.4 1, -6.4 0, -2.4 0), (8 -1.5, 9 -1.5, 9 -2.5, 8 -2.5, 8 -1.5), (8 -0.9, 9 -0.9, 9 0.1, 8 0.1, 8 -0.9), (-10.4 -1.5, -10.4 -2.5, -11.4 -2.5, -11.4 -1.5, -10.4 -1.5), (-10.4 -0.9, -10.4 0.1, -11.4 0.1, -11.4 -0.9, -10.4 -0.9), (4 -2.4, 4 -3.4, -6.4 -3.4, -6.4 -2.4, 4 -2.4))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "0.6",
+                    "width entrance_2 [m]": "0.6",
+                    "width_corridor_1 [m]": "2.4",
+                    "width_corridor_2 [m]": "2.4"
+                },
+                "status": "published"
+            },
+            {
+                "run_name": "ko-240-080-240",
+                "start_date": "2009-05-15",
+                "start_time": "14:24:00",
+                "number_participants": 200,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-2.4 0, -2.4 4, -3.4 4, -3.4 1, -6.4 1, -6.4 0, -2.4 0), (8 -1.6, 9 -1.6, 9 -2.6, 8 -2.6, 8 -1.6), (8 -0.8, 9 -0.8, 9 0.2, 8 0.2, 8 -0.8), (-10.4 -1.6, -10.4 -2.6, -11.4 -2.6, -11.4 -1.6, -10.4 -1.6), (-10.4 -0.8, -10.4 0.2, -11.4 0.2, -11.4 -0.8, -10.4 -0.8), (4 -2.4, 4 -3.4, -6.4 -3.4, -6.4 -2.4, 4 -2.4))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "0.8",
+                    "width entrance_2 [m]": "0.8",
+                    "width_corridor_1 [m]": "2.4",
+                    "width_corridor_2 [m]": "2.4"
+                },
+                "status": "published"
+            },
+            {
+                "run_name": "ko-240-100-240",
+                "start_date": "2009-05-15",
+                "start_time": "14:27:00",
+                "number_participants": 200,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-2.4 0, -2.4 4, -3.4 4, -3.4 1, -6.4 1, -6.4 0, -2.4 0), (8 -1.7, 9 -1.7, 9 -2.7, 8 -2.7, 8 -1.7), (8 -0.7, 9 -0.7, 9 0.3, 8 0.3, 8 -0.7), (-10.4 -1.7, -10.4 -2.7, -11.4 -2.7, -11.4 -1.7, -10.4 -1.7), (-10.4 -0.7, -10.4 0.3, -11.4 0.3, -11.4 -0.7, -10.4 -0.7), (4 -2.4, 4 -3.4, -6.4 -3.4, -6.4 -2.4, 4 -2.4))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "1",
+                    "width entrance_2 [m]": "1",
+                    "width_corridor_1 [m]": "2.4",
+                    "width_corridor_2 [m]": "2.4"
+                },
+                "status": "published"
+            },
+            {
+                "run_name": "ko-240-240-240",
+                "start_date": "2009-05-15",
+                "start_time": "14:29:00",
+                "number_participants": 300,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-2.4 0, -2.4 4, -3.4 4, -3.4 1, -6.4 1, -6.4 0, -2.4 0), (8 -2.4, 9 -2.4, 9 -3.4, 8 -3.4, 8 -2.4), (8 0, 9 0, 9 1, 8 1, 8 0), (-10.4 -2.4, -10.4 -3.4, -11.4 -3.4, -11.4 -2.4, -10.4 -2.4), (-10.4 0, -10.4 1, -11.4 1, -11.4 0, -10.4 0), (4 -2.4, 4 -3.4, -6.4 -3.4, -6.4 -2.4, 4 -2.4))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "2.4",
+                    "width entrance_2 [m]": "2.4",
+                    "width_corridor_1 [m]": "2.4",
+                    "width_corridor_2 [m]": "2.4"
+                },
+                "status": "published"
+            },
+            {
+                "run_name": "ko-240-150-240",
+                "start_date": "2009-05-15",
+                "start_time": "14:31:00",
+                "number_participants": 300,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-2.4 0, -2.4 4, -3.4 4, -3.4 1, -6.4 1, -6.4 0, -2.4 0), (8 -1.95, 9 -1.95, 9 -2.95, 8 -2.95, 8 -1.95), (8 -0.45, 9 -0.45, 9 0.55, 8 0.55, 8 -0.45), (-10.4 -1.95, -10.4 -2.95, -11.4 -2.95, -11.4 -1.95, -10.4 -1.95), (-10.4 -0.45, -10.4 0.55, -11.4 0.55, -11.4 -0.45, -10.4 -0.45), (4 -2.4, 4 -3.4, -6.4 -3.4, -6.4 -2.4, 4 -2.4))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "1.5",
+                    "width entrance_2 [m]": "1.5",
+                    "width_corridor_1 [m]": "2.4",
+                    "width_corridor_2 [m]": "2.4"
+                },
+                "status": "published"
+            },
+            {
+                "run_name": "ko-240-120-240",
+                "start_date": "2009-05-15",
+                "start_time": "14:33:00",
+                "number_participants": 300,
+                "wkt_geometry": "POLYGON ((10 6, -12 6, -12 -6, 10 -6, 10 6), (4 0, 0 0, 0 4, 1 4, 1 1, 4 1, 4 0), (-2.4 0, -2.4 4, -3.4 4, -3.4 1, -6.4 1, -6.4 0, -2.4 0), (8 -1.8, 9 -1.8, 9 -2.8, 8 -2.8, 8 -1.8), (8 -0.6, 9 -0.6, 9 0.4, 8 0.4, 8 -0.6), (-10.4 -1.8, -10.4 -2.8, -11.4 -2.8, -11.4 -1.8, -10.4 -1.8), (-10.4 -0.6, -10.4 0.4, -11.4 0.4, -11.4 -0.6, -10.4 -0.6), (4 -2.4, 4 -3.4, -6.4 -3.4, -6.4 -2.4, 4 -2.4))",
+                "notes": null,
+                "parameter": {
+                    "width_entrance_1 [m]": "1.2",
+                    "width entrance_2 [m]": "1.2",
+                    "width_corridor_1 [m]": "2.4",
+                    "width_corridor_2 [m]": "2.4"
+                },
+                "status": "published"
+            }
+        ],
+        "keywords": [
+            "pedestrian dynamics",
+            "experiment",
+            "camera tracking",
+            "corridor",
+            "convergence",
+            "t-junction"
+        ]
+    }
+}

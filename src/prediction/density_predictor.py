@@ -148,7 +148,7 @@ class DensityFieldPredictor:
             )
         
         if model_path and Path(model_path).exists():
-            state_dict = torch.load(model_path, map_location=self.device)
+            state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
             model.load_state_dict(state_dict)
             print(f"[DensityPredictor] 加载模型: {model_path}")
         else:

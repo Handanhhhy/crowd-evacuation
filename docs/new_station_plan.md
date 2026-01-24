@@ -6,6 +6,24 @@
 
 > **最重要的设计约束：小流量训练的模型必须能直接用于大流量场景，所有模型都必须遵循此原则。**
 
+### 原则零：必须使用真实数据集（学术研究要求）
+
+> **⚠️ 学术研究要求：所有机器学习模型必须使用真实人群疏散数据训练，不能仅依赖仿真数据。**
+
+| 要求 | 说明 |
+|------|------|
+| **数据来源** | 必须使用公开的真实人群疏散数据集（如 Jülich、Lyon） |
+| **禁止** | 仅使用 SFM 仿真生成的数据训练模型 |
+| **原因** | 避免 Sim-to-Real Gap，确保模型能泛化到真实场景 |
+| **数据下载** | 使用 `scripts/download_evacuation_datasets.py` 下载 |
+
+**推荐数据集**:
+- **Jülich Pedestrian Dynamics Data Archive** (DOI: 10.34735/ped.da) - 最权威的疏散实验数据
+- **Lyon Dense Crowd Dataset** (DOI: 10.5281/zenodo.13830435) - 高密度人群数据
+- **Grand Central Station** - 火车站场景数据
+
+详见 [6.3.3 节](#633-⚠️-训练数据必须使用真实数据集) 的详细说明。
+
 ### 原则一：模型泛化性约束
 
 | 约束 | 说明 |
@@ -648,7 +666,131 @@ class DensityPredictor(nn.Module):
         )
 ```
 
-#### 6.3.3 泛化性保证
+#### 6.3.3 ⚠️ 训练数据：必须使用真实数据集
+
+> **学术研究要求：模型必须使用真实人群疏散数据训练，不能仅依赖仿真数据。**
+
+##### 为什么必须使用真实数据？
+
+| 问题 | 仅使用仿真数据 | 使用真实数据 |
+|------|--------------|------------|
+| **Sim-to-Real Gap** | ❌ 模型只学会预测SFM的行为，而非真实人群 | ✅ 学习真实人群行为模式 |
+| **泛化能力** | ❌ 可能过拟合到仿真器的特定模式 | ✅ 能泛化到真实场景 |
+| **学术可信度** | ❌ 存在"自己验证自己"的循环论证 | ✅ 符合学术研究标准 |
+| **行为真实性** | ❌ 忽略恐慌、从众、决策延迟等复杂因素 | ✅ 包含真实心理和行为特征 |
+| **验证价值** | ❌ 无法证明模型在真实场景的有效性 | ✅ 可验证模型的实际应用价值 |
+
+##### 推荐使用的公开数据集
+
+**1. Jülich Pedestrian Dynamics Data Archive（强烈推荐）**
+
+- **网址**: https://ped.fz-juelich.de/da/
+- **DOI**: 10.34735/ped.da
+- **许可**: CC BY 4.0（可免费用于学术研究）
+- **特点**: 
+  - 最权威的行人动力学实验数据库
+  - 专门针对疏散场景设计
+  - 包含瓶颈、T型路口、楼梯、走廊等多种场景
+  - 数据质量高，有完整的轨迹和视频记录
+
+**推荐实验**:
+- `bottleneck`: 瓶颈通过实验（DOI: 10.34735/ped.2009.6）
+- `bottleneck_crowd`: 瓶颈前人群行为（DOI: 10.34735/ped.2018.1）
+- `t_junction`: T型路口人流（DOI: 10.34735/ped.2009.7）
+- `stairs`: 楼梯疏散（DOI: 10.34735/ped.2009.4）
+- `croma`: 交通基础设施人群管理（~1000人，DOI: 10.34735/ped.2021.2）
+
+**2. Lyon Dense Crowd Dataset (2024-2025)**
+
+- **网址**: https://zenodo.org/records/13830435
+- **DOI**: 10.5281/zenodo.13830435
+- **发表**: Nature Scientific Data (2025)
+- **特点**:
+  - 约7,000条行人轨迹
+  - 高密度场景（最高4人/m²）
+  - 包含GPS轨迹、接触/推挤统计
+  - 最新发布的高质量数据集
+
+**3. Grand Central Station Dataset**
+
+- **来源**: Yi et al., CVPR 2015
+- **特点**: 12,684条行人轨迹，火车站场景
+- **注意**: 需要联系作者获取
+
+**4. ETH-UCY Dataset（补充数据）**
+
+- **用途**: 作为补充数据，学习一般行人行为模式
+- **限制**: 人数较少（几十人），非疏散场景
+
+##### 数据下载和使用
+
+```bash
+# 下载所有推荐数据集
+python scripts/download_evacuation_datasets.py --dataset all
+
+# 仅下载 Jülich 瓶颈实验
+python scripts/download_evacuation_datasets.py --dataset juelich --experiment bottleneck
+
+# 下载 Lyon 数据集
+python scripts/download_evacuation_datasets.py --dataset lyon
+
+# 列出所有可用数据集
+python scripts/download_evacuation_datasets.py --list
+```
+
+##### 数据预处理流程
+
+1. **轨迹提取**: 从原始数据提取行人位置序列
+2. **密度场构建**: 将轨迹转换为密度场网格（30×16）
+3. **序列构建**: 构建 (输入序列, 目标序列) 对
+4. **数据增强**: 旋转、缩放、噪声等（可选）
+
+```python
+# 数据加载示例
+from src.ml.data_loader import TrajectoryDataset
+
+# 加载 Jülich 数据
+dataset = TrajectoryDataset(
+    data_path="data/raw/juelich/bottleneck/trajectories.txt",
+    obs_len=10,      # 输入10帧（1秒）
+    pred_len=50,     # 预测50帧（5秒）
+    scale=1.0,      # 坐标缩放（米）
+    dataset_type="juelich"
+)
+```
+
+##### 训练策略建议
+
+**混合训练**（推荐）:
+1. **主数据**: Jülich 疏散实验数据（70%）
+2. **补充数据**: Lyon 高密度数据（20%）
+3. **基准数据**: ETH-UCY（10%，学习一般行为）
+
+**Domain Adaptation**（可选）:
+1. 先用 ETH-UCY 预训练（学习基础行人行为）
+2. 再用 Jülich 数据微调（适应疏散场景）
+
+##### 引用要求
+
+使用数据集时，必须在论文中引用相应的 DOI：
+
+```bibtex
+@dataset{juelich_archive,
+  title={Pedestrian Dynamics Data Archive},
+  author={Forschungszentrum Jülich},
+  doi={10.34735/ped.da},
+  url={https://ped.fz-juelich.de/da/}
+}
+
+@article{lyon_dataset,
+  title={Dense Crowd Dynamics and Pedestrian Trajectories: A Multiscale Field Dataset},
+  journal={Scientific Data},
+  year={2025},
+  doi={10.5281/zenodo.13830435}
+}
+```
+
+#### 6.3.4 泛化性保证
 
 | 设计要点 | 说明 |
 |----------|------|
