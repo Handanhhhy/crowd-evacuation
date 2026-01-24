@@ -61,6 +61,7 @@ def collect_training_data(
     dt: float = 0.1,
     collect_interval: int = 5,
     use_gpu_sfm: bool = True,
+    resume: bool = True,
 ) -> DensityDataCollector:
     """收集训练数据
     
@@ -72,6 +73,7 @@ def collect_training_data(
         dt: 仿真时间步长
         collect_interval: 数据收集间隔（每N步收集一次，默认5步=0.5秒）
         use_gpu_sfm: 是否使用GPU加速SFM（大幅提升速度）
+        resume: 是否从断点续训（自动跳过已完成的episode）
         
     Returns:
         DensityDataCollector: 数据收集器
@@ -79,12 +81,55 @@ def collect_training_data(
     print("=" * 60)
     print("收集训练数据")
     print("=" * 60)
-    print(f"配置:")
-    print(f"  - Episodes: {n_episodes}")
+    
+    # 检查已完成的episodes（断点续训）
+    save_path = Path(save_dir)
+    save_path.mkdir(parents=True, exist_ok=True)
+    
+    existing_episodes = []
+    if resume:
+        for ep_dir in sorted(save_path.iterdir()):
+            if ep_dir.is_dir() and (ep_dir / "frames.pkl").exists():
+                # 解析episode名称
+                name = ep_dir.name
+                if name.startswith(f"episode_") and name.endswith(f"_{flow_level}"):
+                    try:
+                        ep_num = int(name.split("_")[1])
+                        existing_episodes.append(ep_num)
+                    except:
+                        pass
+    
+    existing_episodes = sorted(existing_episodes)
+    start_episode = 0
+    
+    if existing_episodes:
+        # 找到最大的连续episode
+        for i in range(len(existing_episodes)):
+            if existing_episodes[i] == i:
+                start_episode = i + 1
+            else:
+                break
+        
+        if start_episode > 0:
+            print(f"\n🔄 断点续训模式")
+            print(f"  - 已完成: {start_episode} 个episode")
+            print(f"  - 剩余: {n_episodes - start_episode} 个episode")
+            
+            if start_episode >= n_episodes:
+                print(f"\n✅ 所有 {n_episodes} 个episode已完成，无需继续收集")
+                # 创建collector并加载数据
+                exits = [{'id': f'exit_{i}', 'position': np.array([0, 0])} for i in range(8)]
+                collector = DensityDataCollector(exits=exits, save_dir=save_dir)
+                collector.load_all_episodes()
+                return collector
+    
+    print(f"\n配置:")
+    print(f"  - Episodes: {n_episodes} (从第{start_episode}个开始)")
     print(f"  - 人流等级: {flow_level}")
     print(f"  - 最大步数: {max_steps}")
     print(f"  - 收集间隔: 每{collect_interval}步 ({collect_interval * dt:.1f}秒)")
     print(f"  - GPU加速SFM: {use_gpu_sfm}")
+    print(f"  - 数据保存: {save_dir}")
     
     # 性能估算
     flow_config = {
@@ -102,12 +147,13 @@ def collect_training_data(
         est_time_per_step = 2.5  # CPU
         speed_note = "CPU（建议使用--use-gpu-sfm加速）"
     
-    total_steps = n_episodes * max_steps
+    remaining_episodes = n_episodes - start_episode
+    total_steps = remaining_episodes * max_steps
     est_total_time = total_steps * est_time_per_step / 3600  # 小时
     
     print(f"\n性能估算 ({speed_note}):")
     print(f"  - 预计每步时间: ~{est_time_per_step:.1f}秒")
-    print(f"  - 预计总时间: ~{est_total_time:.1f}小时")
+    print(f"  - 剩余总时间: ~{est_total_time:.1f}小时")
     if not use_gpu_sfm:
         print(f"  - 💡 提示: 使用 --use-gpu-sfm 可提速10-20倍！")
     print()
@@ -130,7 +176,7 @@ def collect_training_data(
         save_dir=save_dir,
     )
     
-    for episode_idx in range(n_episodes):
+    for episode_idx in range(start_episode, n_episodes):
         print(f"\n[Episode {episode_idx + 1}/{n_episodes}]")
         
         collector.start_episode({
@@ -531,6 +577,8 @@ def main():
                         help="使用GPU加速SFM（大幅提升速度，默认启用）")
     parser.add_argument("--no-gpu-sfm", dest="use_gpu_sfm", action="store_false",
                         help="禁用GPU加速SFM（使用CPU，较慢）")
+    parser.add_argument("--no-resume", dest="resume", action="store_false", default=True,
+                        help="禁用断点续训（从头开始收集）")
     
     # 训练参数
     parser.add_argument("--epochs", type=int, default=50, help="训练轮数")
@@ -582,6 +630,7 @@ def main():
             save_dir=args.data_dir,
             collect_interval=args.collect_interval,
             use_gpu_sfm=args.use_gpu_sfm,
+            resume=args.resume,
         )
     
     # 训练
