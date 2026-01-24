@@ -104,13 +104,29 @@ class Exit:
 
 @dataclass
 class Escalator:
-    """扶梯定义 (涌入点)"""
+    """扶梯/步梯定义
+
+    扶梯是障碍物 + 行人源：
+    - 本体不可通行（四面围墙）
+    - 行人从出口边缘（exit_edge）进入站厅
+    - 使用队列模型：行人排队 → 运送 → 出口出现
+
+    Attributes:
+        id: 标识符
+        position: 中心位置
+        size: (宽, 高)
+        exit_edge: 出口边缘方向 ("left", "right", "up", "down")
+        travel_time: 运送时间（秒）
+        entry_rate: 入口速率（人/秒）
+    """
     id: str
     position: np.ndarray
     size: Tuple[float, float]
-    direction: str = "up"
-    capacity: int = 60
-    spawn_point: bool = True
+    exit_edge: str = "down"  # 出口边缘方向
+    travel_time: float = 8.0  # 运送时间（秒）
+    entry_rate: float = 1.0   # 入口速率（人/秒）
+    capacity: int = 60        # 扶梯容量
+    is_active: bool = True    # 是否启用
 
 
 class LargeStationEnv(gym.Env):
@@ -262,20 +278,53 @@ class LargeStationEnv(gym.Env):
         self.exit_names = [e.name for e in self.exits]
 
     def _init_escalators(self):
-        """初始化涌入点 (7个: 5扶梯 + 2步梯)"""
+        """初始化扶梯/步梯（队列模型）
+
+        扶梯工作原理：
+        1. 扶梯本体是障碍物（四面围墙）
+        2. 行人在地下层排队上扶梯（不在仿真范围内）
+        3. 扶梯运送行人（travel_time秒）
+        4. 行人从出口边缘（exit_edge）进入站厅
+
+        布局：
+        - 左上: 步梯+扶梯，出口在下方（人从下方出来向下走）
+        - 左下: 步梯，出口在上方（人从上方出来向上走）
+        - 中间×3: 扶梯，出口在左侧（人从左侧出来向左走）
+        """
+        # 尺寸定义
+        esc_size_vertical = (6.0, 12.0)    # 竖向扶梯 (左侧)
+        esc_size_horizontal = (12.0, 6.0)  # 横向扶梯 (中间)
+
         self.escalators = [
-            # 中间3个扶梯
-            Escalator("escalator_1", np.array([52.5, 40.0]), (25.0, 16.0), "up", 60, True),
-            Escalator("escalator_2", np.array([82.5, 40.0]), (25.0, 16.0), "up", 60, True),
-            Escalator("escalator_3", np.array([112.5, 40.0]), (25.0, 16.0), "up", 60, True),
-            # 左上扶梯和步梯
-            Escalator("escalator_left_upper", np.array([10.0, 72.0]), (6.0, 12.0), "up", 60, True),
-            Escalator("stairs_left_upper", np.array([2.0, 72.0]), (6.0, 12.0), "up", 40, True),
-            # 左下扶梯和步梯
-            Escalator("escalator_left_lower", np.array([10.0, 8.0]), (6.0, 12.0), "up", 60, True),
-            Escalator("stairs_left_lower", np.array([2.0, 8.0]), (6.0, 12.0), "up", 40, True),
+            # 中间3个扶梯: 横向布局，出口在左侧
+            Escalator("escalator_1", np.array([45.0, 40.0]), esc_size_horizontal,
+                      exit_edge="left", travel_time=8.0, entry_rate=1.2, capacity=60),
+            Escalator("escalator_2", np.array([75.0, 40.0]), esc_size_horizontal,
+                      exit_edge="left", travel_time=8.0, entry_rate=1.2, capacity=60),
+            Escalator("escalator_3", np.array([105.0, 40.0]), esc_size_horizontal,
+                      exit_edge="left", travel_time=8.0, entry_rate=1.2, capacity=60),
+            # 左上: 步梯+扶梯（紧挨），出口在下方
+            Escalator("stairs_left_upper", np.array([5.0, 71.0]), esc_size_vertical,
+                      exit_edge="down", travel_time=10.0, entry_rate=0.8, capacity=40),
+            Escalator("escalator_left_upper", np.array([11.0, 71.0]), esc_size_vertical,
+                      exit_edge="down", travel_time=8.0, entry_rate=1.0, capacity=60),
+            # 左下: 步梯+扶梯（紧挨），出口在上方
+            Escalator("stairs_left_lower", np.array([5.0, 9.0]), esc_size_vertical,
+                      exit_edge="up", travel_time=10.0, entry_rate=0.8, capacity=40),
+            Escalator("escalator_left_lower", np.array([11.0, 9.0]), esc_size_vertical,
+                      exit_edge="up", travel_time=8.0, entry_rate=1.0, capacity=60),
         ]
         self.n_escalators = len(self.escalators)
+
+        # 初始化每个扶梯的队列（存储 (进入时间, 行人类型) ）
+        self.escalator_queues = {esc.id: [] for esc in self.escalators}
+
+        # 直升电梯（纯障碍物，无队列）
+        self.elevator = {
+            "id": "elevator",
+            "position": np.array([24.0, 30.0]),
+            "size": (8.0, 8.0),
+        }
 
     def _create_sfm(self):
         """创建社会力模型实例"""
@@ -377,14 +426,35 @@ class LargeStationEnv(gym.Env):
         sfm.add_obstacle(np.array([20, 0]), np.array([20, 10]))
 
     def _add_escalator_barriers(self, sfm):
-        """添加扶梯护栏"""
+        """添加扶梯/步梯/电梯障碍物
+
+        所有扶梯/步梯/电梯都是**完全不可通行的障碍物**（四面围墙）
+        行人在边缘外部生成，不会进入这些区域
+        """
+        # 所有扶梯/步梯都是四面封闭的障碍物
         for esc in self.escalators:
             x, y = esc.position
             w, h = esc.size
 
-            # 扶梯两侧护栏
-            sfm.add_obstacle(np.array([x - w/2, y - h/2]), np.array([x - w/2, y + h/2]))
-            sfm.add_obstacle(np.array([x + w/2, y - h/2]), np.array([x + w/2, y + h/2]))
+            left = x - w/2
+            right = x + w/2
+            bottom = y - h/2
+            top = y + h/2
+
+            # 四面围墙
+            sfm.add_obstacle(np.array([left, bottom]), np.array([right, bottom]))  # 下
+            sfm.add_obstacle(np.array([left, top]), np.array([right, top]))        # 上
+            sfm.add_obstacle(np.array([left, bottom]), np.array([left, top]))      # 左
+            sfm.add_obstacle(np.array([right, bottom]), np.array([right, top]))    # 右
+
+        # 直升电梯 (四面封闭障碍物)
+        if hasattr(self, 'elevator'):
+            ex, ey = self.elevator["position"]
+            ew, eh = self.elevator["size"]
+            sfm.add_obstacle(np.array([ex - ew/2, ey - eh/2]), np.array([ex + ew/2, ey - eh/2]))  # 下
+            sfm.add_obstacle(np.array([ex - ew/2, ey + eh/2]), np.array([ex + ew/2, ey + eh/2]))  # 上
+            sfm.add_obstacle(np.array([ex - ew/2, ey - eh/2]), np.array([ex - ew/2, ey + eh/2]))  # 左
+            sfm.add_obstacle(np.array([ex + ew/2, ey - eh/2]), np.array([ex + ew/2, ey + eh/2]))  # 右
 
     def _is_in_t_shape(self, x: float, y: float) -> bool:
         """检查位置是否在T形区域内"""
@@ -401,6 +471,48 @@ class LargeStationEnv(gym.Env):
         if 20 <= x <= 150 and 25 <= y <= 55:
             return True
         return False
+
+    def _is_in_obstacle(self, x: float, y: float, margin: float = 0.5) -> bool:
+        """检查位置是否在障碍物内（扶梯、电梯等）
+
+        Args:
+            x, y: 位置坐标
+            margin: 安全边距（避免太靠近障碍物）
+        """
+        # 检查所有扶梯/步梯
+        for esc in self.escalators:
+            ex, ey = esc.position
+            w, h = esc.size
+            if (ex - w/2 - margin <= x <= ex + w/2 + margin and
+                ey - h/2 - margin <= y <= ey + h/2 + margin):
+                return True
+
+        # 检查电梯
+        if hasattr(self, 'elevator'):
+            ex, ey = self.elevator["position"]
+            w, h = self.elevator["size"]
+            if (ex - w/2 - margin <= x <= ex + w/2 + margin and
+                ey - h/2 - margin <= y <= ey + h/2 + margin):
+                return True
+
+        return False
+
+    def _get_valid_spawn_position(self, bounds: tuple, max_attempts: int = 50) -> np.ndarray:
+        """获取有效的生成位置（不在障碍物内）
+
+        Args:
+            bounds: (x_min, y_min, x_max, y_max)
+            max_attempts: 最大尝试次数
+        """
+        x_min, y_min, x_max, y_max = bounds
+        for _ in range(max_attempts):
+            x = np.random.uniform(x_min, x_max)
+            y = np.random.uniform(y_min, y_max)
+            if not self._is_in_obstacle(x, y):
+                return np.array([x, y])
+
+        # 如果多次尝试失败，返回边界内的随机位置（可能仍在障碍物内）
+        return np.array([np.random.uniform(x_min, x_max), np.random.uniform(y_min, y_max)])
 
     def _spawn_upper_layer(self):
         """生成上层初始行人"""
@@ -425,12 +537,10 @@ class LargeStationEnv(gym.Env):
             # 选择生成区域
             area_weights = [a["weight"] for a in spawn_areas]
             area_idx = np.random.choice(len(spawn_areas), p=area_weights)
-            x_min, y_min, x_max, y_max = spawn_areas[area_idx]["bounds"]
+            bounds = spawn_areas[area_idx]["bounds"]
 
-            position = np.array([
-                np.random.uniform(x_min, x_max),
-                np.random.uniform(y_min, y_max)
-            ])
+            # 确保不在障碍物内生成
+            position = self._get_valid_spawn_position(bounds)
             velocity = np.zeros(2)
 
             initial_target = self._select_initial_target(position)
@@ -472,16 +582,14 @@ class LargeStationEnv(gym.Env):
         radii = np.zeros(n, dtype=np.float32)
         reaction_times = np.zeros(n, dtype=np.float32)
 
-        # 批量生成数据
+        # 批量生成数据（确保不在障碍物内）
         area_weights = [a["weight"] for a in spawn_areas]
         for i in range(n):
             area_idx = np.random.choice(len(spawn_areas), p=area_weights)
-            x_min, y_min, x_max, y_max = spawn_areas[area_idx]["bounds"]
+            bounds = spawn_areas[area_idx]["bounds"]
 
-            positions[i] = [
-                np.random.uniform(x_min, x_max),
-                np.random.uniform(y_min, y_max)
-            ]
+            # 确保不在障碍物内生成
+            positions[i] = self._get_valid_spawn_position(bounds)
             targets[i] = self._select_initial_target(positions[i])
 
             ped_type = np.random.choice(types, p=probs)
@@ -538,20 +646,20 @@ class LargeStationEnv(gym.Env):
         return self.exits[choice].position.copy()
 
     def _spawn_from_escalator(self):
-        """从扶梯生成涌入行人"""
+        """扶梯队列模型：处理行人进入和离开扶梯
+
+        队列模型流程：
+        1. 行人以entry_rate速率进入扶梯队列（入口端）
+        2. 在队列中等待travel_time秒
+        3. 从出口边缘（exit_edge）离开扶梯进入站厅
+        """
         if self.use_optimized_gpu_sfm:
             return self._spawn_from_escalator_optimized()
 
         if self.spawned_from_lower >= self.lower_layer_count:
             return 0
 
-        spawn_this_step = self.spawn_rate * self.dt
-        spawn_count = np.random.poisson(spawn_this_step)
-        spawn_count = min(spawn_count, self.lower_layer_count - self.spawned_from_lower)
-
-        if spawn_count <= 0:
-            return 0
-
+        current_time = self.current_step * self.dt
         types = list(self.type_distribution.keys())
         probs = list(self.type_distribution.values())
         total = sum(probs)
@@ -560,76 +668,151 @@ class LargeStationEnv(gym.Env):
         spawned = 0
         next_id = len(self.sfm.pedestrians)
 
-        for _ in range(spawn_count):
-            esc = np.random.choice(self.escalators)
+        # 1. 向各扶梯队列添加新行人（入口端）
+        for esc in self.escalators:
+            if not esc.is_active:
+                continue
+            if self.spawned_from_lower >= self.lower_layer_count:
+                break
 
-            position = np.array([
-                esc.position[0] + np.random.uniform(-2, 2),
-                esc.position[1] + np.random.uniform(-2, 2)
-            ])
-            velocity = np.zeros(2)
+            # 按entry_rate添加行人到队列
+            new_entries = np.random.poisson(esc.entry_rate * self.dt)
+            for _ in range(new_entries):
+                if self.spawned_from_lower >= self.lower_layer_count:
+                    break
+                if len(self.escalator_queues[esc.id]) >= esc.capacity:
+                    continue  # 扶梯已满
 
-            target = self._select_initial_target(position)
-            ped_type = np.random.choice(types, p=probs)
+                ped_type = np.random.choice(types, p=probs)
+                # 记录：(进入时间, 行人类型)
+                self.escalator_queues[esc.id].append((current_time, ped_type))
+                self.spawned_from_lower += 1
 
-            ped = Pedestrian.create_with_type(
-                id=next_id,
-                position=position,
-                velocity=velocity,
-                target=target,
-                ped_type=ped_type,
-                speed_variation=True
-            )
-            self.sfm.add_pedestrian(ped)
+        # 2. 从各扶梯队列释放完成运送的行人（出口端）
+        for esc in self.escalators:
+            queue = self.escalator_queues[esc.id]
+            released = []
 
-            next_id += 1
-            spawned += 1
-            self.spawned_from_lower += 1
+            for i, (entry_time, ped_type) in enumerate(queue):
+                if current_time - entry_time >= esc.travel_time:
+                    released.append(i)
+
+                    # 在出口边缘生成行人
+                    position = self._get_escalator_exit_position(esc)
+                    target = self._select_initial_target(position)
+
+                    ped = Pedestrian.create_with_type(
+                        id=next_id,
+                        position=position,
+                        velocity=np.zeros(2),
+                        target=target,
+                        ped_type=ped_type,
+                        speed_variation=True
+                    )
+                    self.sfm.add_pedestrian(ped)
+                    next_id += 1
+                    spawned += 1
+
+            # 从队列中移除已释放的行人（倒序删除）
+            for i in reversed(released):
+                queue.pop(i)
 
         return spawned
 
+    def _get_escalator_exit_position(self, esc: Escalator) -> np.ndarray:
+        """获取扶梯出口位置"""
+        x, y = esc.position
+        w, h = esc.size
+
+        if esc.exit_edge == "left":
+            return np.array([
+                x - w/2 - 0.5,
+                y + np.random.uniform(-h/2 + 0.5, h/2 - 0.5)
+            ])
+        elif esc.exit_edge == "right":
+            return np.array([
+                x + w/2 + 0.5,
+                y + np.random.uniform(-h/2 + 0.5, h/2 - 0.5)
+            ])
+        elif esc.exit_edge == "down":
+            return np.array([
+                x + np.random.uniform(-w/2 + 0.5, w/2 - 0.5),
+                y - h/2 - 0.5
+            ])
+        elif esc.exit_edge == "up":
+            return np.array([
+                x + np.random.uniform(-w/2 + 0.5, w/2 - 0.5),
+                y + h/2 + 0.5
+            ])
+        else:
+            return np.array([x, y])
+
     def _spawn_from_escalator_optimized(self):
-        """优化版：从扶梯批量生成涌入行人"""
+        """优化版：扶梯队列模型（GPU版本）"""
         import torch
 
         if self.spawned_from_lower >= self.lower_layer_count:
             return 0
 
-        spawn_this_step = self.spawn_rate * self.dt
-        spawn_count = np.random.poisson(spawn_this_step)
-        spawn_count = min(spawn_count, self.lower_layer_count - self.spawned_from_lower)
-
-        if spawn_count <= 0:
-            return 0
-
+        current_time = self.current_step * self.dt
         types = list(self.type_distribution.keys())
         probs = list(self.type_distribution.values())
         total = sum(probs)
         probs = [p / total for p in probs]
 
-        # 批量生成新行人数据
-        new_positions = np.zeros((spawn_count, 2), dtype=np.float32)
+        # 1. 向各扶梯队列添加新行人
+        for esc in self.escalators:
+            if not esc.is_active:
+                continue
+            if self.spawned_from_lower >= self.lower_layer_count:
+                break
+
+            new_entries = np.random.poisson(esc.entry_rate * self.dt)
+            for _ in range(new_entries):
+                if self.spawned_from_lower >= self.lower_layer_count:
+                    break
+                if len(self.escalator_queues[esc.id]) >= esc.capacity:
+                    continue
+
+                ped_type = np.random.choice(types, p=probs)
+                self.escalator_queues[esc.id].append((current_time, ped_type))
+                self.spawned_from_lower += 1
+
+        # 2. 收集所有需要释放的行人
+        to_spawn = []
+        for esc in self.escalators:
+            queue = self.escalator_queues[esc.id]
+            released = []
+
+            for i, (entry_time, ped_type) in enumerate(queue):
+                if current_time - entry_time >= esc.travel_time:
+                    released.append(i)
+                    position = self._get_escalator_exit_position(esc)
+                    target = self._select_initial_target(position)
+                    params = PEDESTRIAN_TYPE_PARAMS[ped_type]
+                    to_spawn.append({
+                        'position': position,
+                        'target': target,
+                        'desired_speed': params['desired_speed'] + np.random.normal(0, params['speed_std'] * 0.3),
+                        'radius': params['radius'],
+                        'reaction_time': params['reaction_time'],
+                    })
+
+            for i in reversed(released):
+                queue.pop(i)
+
+        if len(to_spawn) == 0:
+            return 0
+
+        # 3. 批量添加到GPU
+        spawn_count = len(to_spawn)
+        new_positions = np.array([s['position'] for s in to_spawn], dtype=np.float32)
         new_velocities = np.zeros((spawn_count, 2), dtype=np.float32)
-        new_targets = np.zeros((spawn_count, 2), dtype=np.float32)
-        new_desired_speeds = np.zeros(spawn_count, dtype=np.float32)
-        new_radii = np.zeros(spawn_count, dtype=np.float32)
-        new_reaction_times = np.zeros(spawn_count, dtype=np.float32)
+        new_targets = np.array([s['target'] for s in to_spawn], dtype=np.float32)
+        new_desired_speeds = np.array([s['desired_speed'] for s in to_spawn], dtype=np.float32)
+        new_radii = np.array([s['radius'] for s in to_spawn], dtype=np.float32)
+        new_reaction_times = np.array([s['reaction_time'] for s in to_spawn], dtype=np.float32)
 
-        for i in range(spawn_count):
-            esc = np.random.choice(self.escalators)
-            new_positions[i] = [
-                esc.position[0] + np.random.uniform(-2, 2),
-                esc.position[1] + np.random.uniform(-2, 2)
-            ]
-            new_targets[i] = self._select_initial_target(new_positions[i])
-
-            ped_type = np.random.choice(types, p=probs)
-            params = PEDESTRIAN_TYPE_PARAMS[ped_type]
-            new_desired_speeds[i] = params['desired_speed'] + np.random.normal(0, params['speed_std'] * 0.3)
-            new_radii[i] = params['radius']
-            new_reaction_times[i] = params['reaction_time']
-
-        # 追加到GPU张量
         device = self.sfm.device
         self.sfm.positions = torch.cat([
             self.sfm.positions,
@@ -670,7 +853,6 @@ class LargeStationEnv(gym.Env):
 
         self.sfm.n_pedestrians += spawn_count
         self.sfm._cpu_synced = False
-        self.spawned_from_lower += spawn_count
 
         return spawn_count
 
@@ -691,6 +873,9 @@ class LargeStationEnv(gym.Env):
         self.spawned_from_lower = 0
         self.evacuation_rate_buffer = [0.0] * 5
         self.last_evacuated_count = 0
+
+        # 重置扶梯队列
+        self.escalator_queues = {esc.id: [] for esc in self.escalators}
 
         self.history = {
             'evacuated': [],

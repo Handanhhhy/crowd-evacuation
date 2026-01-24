@@ -69,49 +69,63 @@ def plot_t_shape_station(save_path="outputs/figures/large_station_layout.png"):
     ax.add_patch(t_shape)
 
     # ==================== 左上角: 步梯 + 扶梯 ====================
+    # 扶梯/步梯是障碍物（斜线填充），行人从下方边缘生成
 
-    # 步梯 (蓝色)
+    # 步梯 - 中心(5, 71)，尺寸6x12
     stair_upper = FancyBboxPatch((2, 65), 6, 12, boxstyle="round,pad=0.02",
-                                 facecolor='royalblue', edgecolor='navy', linewidth=2)
+                                 facecolor='white', edgecolor='navy', linewidth=2,
+                                 hatch='///')  # 斜线表示障碍物
     ax.add_patch(stair_upper)
-    ax.text(5, 71, '步梯', ha='center', va='center', fontsize=10, color='white', fontweight='bold')
-    ax.annotate('', xy=(5, 78), xytext=(5, 66),
-               arrowprops=dict(arrowstyle='->', color='white', lw=2))
+    ax.text(5, 71, '步梯', ha='center', va='center', fontsize=9, color='navy', fontweight='bold')
+    # 下方生成边缘（绿色线）
+    ax.plot([2, 8], [65, 65], color='limegreen', linewidth=4)
+    # 行人流向箭头
+    ax.annotate('', xy=(5, 62), xytext=(5, 65),
+               arrowprops=dict(arrowstyle='->', color='blue', lw=2))
 
-    # 扶梯 (灰色)
-    escalator_upper = FancyBboxPatch((10, 65), 6, 12, boxstyle="round,pad=0.02",
-                                     facecolor='lightgray', edgecolor='gray', linewidth=2)
+    # 扶梯 - 中心(11, 71)，紧挨步梯
+    escalator_upper = FancyBboxPatch((8, 65), 6, 12, boxstyle="round,pad=0.02",
+                                     facecolor='white', edgecolor='gray', linewidth=2,
+                                     hatch='///')
     ax.add_patch(escalator_upper)
-    ax.text(13, 71, '扶梯', ha='center', va='center', fontsize=10, color='dimgray', fontweight='bold')
-    ax.annotate('', xy=(13, 78), xytext=(13, 66),
-               arrowprops=dict(arrowstyle='->', color='dimgray', lw=2))
+    ax.text(11, 71, '扶梯', ha='center', va='center', fontsize=9, color='dimgray', fontweight='bold')
+    # 下方生成边缘
+    ax.plot([8, 14], [65, 65], color='limegreen', linewidth=4)
+    ax.annotate('', xy=(11, 62), xytext=(11, 65),
+               arrowprops=dict(arrowstyle='->', color='blue', lw=2))
 
     # ==================== 左下角: 步梯 + 扶梯 + 直升电梯 ====================
+    # 步梯和扶梯是障碍物，行人从上方边缘出来
 
-    # 步梯 (蓝色)
+    # 步梯 - 中心(5, 9)，尺寸6x12
     stair_lower = FancyBboxPatch((2, 3), 6, 12, boxstyle="round,pad=0.02",
-                                 facecolor='royalblue', edgecolor='navy', linewidth=2)
+                                 facecolor='white', edgecolor='navy', linewidth=2,
+                                 hatch='///')
     ax.add_patch(stair_lower)
-    ax.text(5, 9, '步梯', ha='center', va='center', fontsize=10, color='white', fontweight='bold')
-    ax.annotate('', xy=(5, 2), xytext=(5, 14),
-               arrowprops=dict(arrowstyle='->', color='white', lw=2))
+    ax.text(5, 9, '步梯', ha='center', va='center', fontsize=9, color='navy', fontweight='bold')
+    # 上方出口边缘（绿色线）
+    ax.plot([2, 8], [15, 15], color='limegreen', linewidth=4)
+    # 行人流向箭头
+    ax.annotate('', xy=(5, 18), xytext=(5, 15),
+               arrowprops=dict(arrowstyle='->', color='blue', lw=2))
 
-    # 扶梯 (灰色) - 新增！
-    escalator_lower = FancyBboxPatch((10, 3), 6, 12, boxstyle="round,pad=0.02",
-                                     facecolor='lightgray', edgecolor='gray', linewidth=2)
+    # 扶梯 - 中心(11, 9)，紧挨步梯
+    escalator_lower = FancyBboxPatch((8, 3), 6, 12, boxstyle="round,pad=0.02",
+                                     facecolor='white', edgecolor='gray', linewidth=2,
+                                     hatch='///')
     ax.add_patch(escalator_lower)
-    ax.text(13, 9, '扶梯', ha='center', va='center', fontsize=10, color='dimgray', fontweight='bold')
-    ax.annotate('', xy=(13, 2), xytext=(13, 14),
-               arrowprops=dict(arrowstyle='->', color='dimgray', lw=2))
+    ax.text(11, 9, '扶梯', ha='center', va='center', fontsize=9, color='dimgray', fontweight='bold')
+    # 上方出口边缘
+    ax.plot([8, 14], [15, 15], color='limegreen', linewidth=4)
+    ax.annotate('', xy=(11, 18), xytext=(11, 15),
+               arrowprops=dict(arrowstyle='->', color='blue', lw=2))
 
-    # 直升电梯 (红色 - 禁用) - 位置: X=22, Y=28 附近
+    # 直升电梯 (红色斜线 - 纯障碍物，无出口)
     elevator = FancyBboxPatch((20, 26), 8, 8, boxstyle="round,pad=0.02",
-                              facecolor='lightcoral', edgecolor='darkred', linewidth=2)
+                              facecolor='white', edgecolor='darkred', linewidth=2,
+                              hatch='xxx')
     ax.add_patch(elevator)
     ax.text(24, 30, '直升\n电梯', ha='center', va='center', fontsize=8, color='darkred', fontweight='bold')
-    # X标记表示禁用
-    ax.plot([21, 27], [27, 33], 'darkred', linewidth=2)
-    ax.plot([21, 27], [33, 27], 'darkred', linewidth=2)
 
     # ==================== 闸机a (左侧疏散口) - Y=40为中心对称 ====================
 
@@ -227,34 +241,48 @@ def plot_t_shape_station(save_path="outputs/figures/large_station_layout.png"):
                    arrowprops=dict(arrowstyle='->', color='green', lw=1))
 
     # ==================== 中间扶梯 (涌入点) ====================
+    # 扶梯是障碍物（斜线填充），横向布局，行人从左侧出口出来
+    # 尺寸: 12m × 6m (横向)
 
-    # 扶梯1
-    esc1_x = 40
-    esc1 = FancyBboxPatch((esc1_x, 32), 25, 16, boxstyle="round,pad=0.02",
-                          facecolor='lightyellow', edgecolor='orange', linewidth=2)
+    esc_w, esc_h = 12, 6  # 横向扶梯
+
+    # 扶梯1 - 中心(45, 40)
+    esc1_x = 45 - esc_w/2
+    esc1_y = 40 - esc_h/2
+    esc1 = FancyBboxPatch((esc1_x, esc1_y), esc_w, esc_h, boxstyle="round,pad=0.02",
+                          facecolor='white', edgecolor='orange', linewidth=2,
+                          hatch='///')
     ax.add_patch(esc1)
-    ax.text(esc1_x + 12.5, 40, '扶梯1\n(涌入点)', ha='center', va='center', fontsize=10, color='darkorange', fontweight='bold')
-    # 双向箭头
-    ax.annotate('', xy=(esc1_x + 5, 40), xytext=(esc1_x + 20, 40),
-               arrowprops=dict(arrowstyle='<->', color='darkorange', lw=2))
+    ax.text(45, 40, '扶梯1', ha='center', va='center', fontsize=9, color='darkorange', fontweight='bold')
+    # 左侧出口边缘（绿色线）
+    ax.plot([esc1_x, esc1_x], [esc1_y, esc1_y + esc_h], color='limegreen', linewidth=4)
+    # 行人流向箭头
+    ax.annotate('', xy=(esc1_x - 5, 40), xytext=(esc1_x, 40),
+               arrowprops=dict(arrowstyle='->', color='blue', lw=2))
 
-    # 扶梯2
-    esc2_x = 70
-    esc2 = FancyBboxPatch((esc2_x, 32), 25, 16, boxstyle="round,pad=0.02",
-                          facecolor='lightyellow', edgecolor='orange', linewidth=2)
+    # 扶梯2 - 中心(75, 40)
+    esc2_x = 75 - esc_w/2
+    esc2_y = 40 - esc_h/2
+    esc2 = FancyBboxPatch((esc2_x, esc2_y), esc_w, esc_h, boxstyle="round,pad=0.02",
+                          facecolor='white', edgecolor='orange', linewidth=2,
+                          hatch='///')
     ax.add_patch(esc2)
-    ax.text(esc2_x + 12.5, 40, '扶梯2\n(涌入点)', ha='center', va='center', fontsize=10, color='darkorange', fontweight='bold')
-    ax.annotate('', xy=(esc2_x + 5, 40), xytext=(esc2_x + 20, 40),
-               arrowprops=dict(arrowstyle='<->', color='darkorange', lw=2))
+    ax.text(75, 40, '扶梯2', ha='center', va='center', fontsize=9, color='darkorange', fontweight='bold')
+    ax.plot([esc2_x, esc2_x], [esc2_y, esc2_y + esc_h], color='limegreen', linewidth=4)
+    ax.annotate('', xy=(esc2_x - 5, 40), xytext=(esc2_x, 40),
+               arrowprops=dict(arrowstyle='->', color='blue', lw=2))
 
-    # 扶梯3
-    esc3_x = 100
-    esc3 = FancyBboxPatch((esc3_x, 32), 25, 16, boxstyle="round,pad=0.02",
-                          facecolor='lightyellow', edgecolor='orange', linewidth=2)
+    # 扶梯3 - 中心(105, 40)
+    esc3_x = 105 - esc_w/2
+    esc3_y = 40 - esc_h/2
+    esc3 = FancyBboxPatch((esc3_x, esc3_y), esc_w, esc_h, boxstyle="round,pad=0.02",
+                          facecolor='white', edgecolor='orange', linewidth=2,
+                          hatch='///')
     ax.add_patch(esc3)
-    ax.text(esc3_x + 12.5, 40, '扶梯3\n(涌入点)', ha='center', va='center', fontsize=10, color='darkorange', fontweight='bold')
-    ax.annotate('', xy=(esc3_x + 5, 40), xytext=(esc3_x + 20, 40),
-               arrowprops=dict(arrowstyle='<->', color='darkorange', lw=2))
+    ax.text(105, 40, '扶梯3', ha='center', va='center', fontsize=9, color='darkorange', fontweight='bold')
+    ax.plot([esc3_x, esc3_x], [esc3_y, esc3_y + esc_h], color='limegreen', linewidth=4)
+    ax.annotate('', xy=(esc3_x - 5, 40), xytext=(esc3_x, 40),
+               arrowprops=dict(arrowstyle='->', color='blue', lw=2))
 
     # ==================== 人流说明 ====================
 
@@ -272,11 +300,32 @@ def plot_t_shape_station(save_path="outputs/figures/large_station_layout.png"):
 
     legend_items = [
         (legend_y - 8, 'limegreen', '闸机 (疏散口)'),
-        (legend_y - 16, 'royalblue', '步梯'),
-        (legend_y - 24, 'lightgray', '扶梯 (左侧)'),
-        (legend_y - 32, 'lightyellow', '扶梯 (中间涌入点)'),
-        (legend_y - 40, 'lightcoral', '电梯 (紧急禁用)'),
+        (legend_y - 16, 'limegreen', '行人生成边缘'),
     ]
+
+    for y, color, label in legend_items:
+        if color == 'limegreen' and '生成' in label:
+            ax.plot([legend_x, legend_x + 4], [y + 1.5, y + 1.5], color=color, linewidth=4)
+        else:
+            rect = Rectangle((legend_x, y), 4, 3)
+            rect.set_facecolor(color)
+            rect.set_edgecolor('gray')
+            ax.add_patch(rect)
+        ax.text(legend_x + 6, y + 1.5, label, fontsize=9, va='center')
+
+    # 斜线图例
+    hatch_items = [
+        (legend_y - 24, '///', 'navy', '步梯/扶梯 (障碍物)'),
+        (legend_y - 32, 'xxx', 'darkred', '电梯 (禁用)'),
+    ]
+    for y, hatch, edgecolor, label in hatch_items:
+        rect = FancyBboxPatch((legend_x, y), 4, 3, boxstyle="round,pad=0.01",
+                              facecolor='white', edgecolor=edgecolor, hatch=hatch)
+        ax.add_patch(rect)
+        ax.text(legend_x + 6, y + 1.5, label, fontsize=9, va='center')
+
+    # 删除原来的legend循环，用新的替代
+    legend_items = []  # 清空避免重复
 
     for y, color, label in legend_items:
         rect = Rectangle((legend_x, y), 4, 3)
@@ -286,17 +335,20 @@ def plot_t_shape_station(save_path="outputs/figures/large_station_layout.png"):
         ax.text(legend_x + 6, y + 1.5, label, fontsize=9, va='center')
 
     # 信息框
-    info_text = """紧急模式:
-• 中间扶梯: 下层涌入
-• 电梯: 禁用
-• 闸机: 疏散出口
+    info_text = """队列模型:
+• 扶梯/步梯: 障碍物
+• 绿色线: 出口边缘
+• 行人排队→运送→出口
+
+涌入点 (7个):
+  中间扶梯×3: 左侧出口
+  左上步梯+扶梯: 下方出口
+  左下步梯+扶梯: 上方出口
 
 人流量:
   小: 500+500=1000人
   中: 1000+1000=2000人
-  大: 1500+1500=3000人
-
-目标: 10分钟内疏散"""
+  大: 1500+1500=3000人"""
 
     ax.text(legend_x, legend_y - 50, info_text, fontsize=9, va='top',
            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
