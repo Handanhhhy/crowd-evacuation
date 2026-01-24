@@ -105,7 +105,7 @@ class StationVisualizer:
         poly_pts = [self.world_to_screen(p) for p in pts]
         pygame.draw.polygon(screen, COLORS['floor'], poly_pts)
 
-        # 2. 绘制直升电梯 (障碍物)
+        # 2. 绘制直升电梯 (完全禁行障碍物)
         if hasattr(self.env, 'elevator'):
             elev = self.env.elevator
             ex, ey = elev["position"]
@@ -113,56 +113,242 @@ class StationVisualizer:
             tl = self.world_to_screen((ex - ew/2, ey + eh/2))
             br = self.world_to_screen((ex + ew/2, ey - eh/2))
             rect = pygame.Rect(tl[0], tl[1], br[0]-tl[0], br[1]-tl[1])
-            pygame.draw.rect(screen, (255, 127, 127), rect)  # 浅红色
-            pygame.draw.rect(screen, (139, 0, 0), rect, 2)   # 深红边框
-            # X标记
-            pygame.draw.line(screen, (139, 0, 0), rect.topleft, rect.bottomright, 2)
-            pygame.draw.line(screen, (139, 0, 0), rect.topright, rect.bottomleft, 2)
+            pygame.draw.rect(screen, (255, 200, 200), rect)  # 浅红色背景
 
-        # 3. 绘制扶梯/楼梯区域（障碍物 + 出口边缘）
+            # 绘制X斜线表示完全禁行
+            line_color = (180, 0, 0)
+            line_spacing = 10
+            # 正斜线
+            for i in range(-rect.height, rect.width, line_spacing):
+                start_x = rect.left + max(0, i)
+                start_y = rect.top + max(0, -i)
+                end_x = rect.left + min(rect.width, i + rect.height)
+                end_y = rect.top + min(rect.height, rect.height - i)
+                if start_x < rect.right and end_x > rect.left:
+                    pygame.draw.line(screen, line_color, (start_x, start_y), (end_x, end_y), 1)
+            # 反斜线
+            for i in range(-rect.height, rect.width, line_spacing):
+                start_x = rect.right - max(0, i)
+                start_y = rect.top + max(0, -i)
+                end_x = rect.right - min(rect.width, i + rect.height)
+                end_y = rect.top + min(rect.height, rect.height - i)
+                if start_x > rect.left and end_x < rect.right:
+                    pygame.draw.line(screen, line_color, (start_x, start_y), (end_x, end_y), 1)
+
+            pygame.draw.rect(screen, (139, 0, 0), rect, 2)  # 深红边框
+
+        # 3. 绘制扶梯/楼梯区域
+        # 步梯：整体蓝色，无禁行区
+        # 扶梯：运送区（灰色）+ 禁行区（红X）
         for esc in self.env.escalators:
             w, h = esc.size
             x, y = esc.position
             x1, y1 = x - w/2, y - h/2
+            exit_edge = getattr(esc, 'exit_edge', 'down')
+            is_stairs = 'stair' in esc.id
 
+            # 整体矩形
             tl = self.world_to_screen((x1, y1 + h))
             br = self.world_to_screen((x1 + w, y1))
-            rect = pygame.Rect(tl[0], tl[1], br[0]-tl[0], br[1]-tl[1])
+            full_rect = pygame.Rect(tl[0], tl[1], br[0]-tl[0], br[1]-tl[1])
 
-            # 区分步梯和扶梯 (都是障碍物)
-            color = COLORS['stairs'] if 'stair' in esc.id else COLORS['escalator']
-            pygame.draw.rect(screen, color, rect)
-            pygame.draw.rect(screen, BLACK, rect, 2)
+            if is_stairs:
+                # 步梯：整体蓝色，无禁行区
+                pygame.draw.rect(screen, COLORS['stairs'], full_rect)
+                pygame.draw.rect(screen, BLACK, full_rect, 2)
 
-            # 绘制出口边缘（绿色线）
-            exit_color = (0, 200, 0)  # 亮绿色
-            exit_edge = getattr(esc, 'exit_edge', 'down')
-            if exit_edge == "left":
-                start = self.world_to_screen((x1, y1))
-                end = self.world_to_screen((x1, y1 + h))
-                pygame.draw.line(screen, exit_color, start, end, 4)
-            elif exit_edge == "right":
-                start = self.world_to_screen((x1 + w, y1))
-                end = self.world_to_screen((x1 + w, y1 + h))
-                pygame.draw.line(screen, exit_color, start, end, 4)
-            elif exit_edge == "down":
-                start = self.world_to_screen((x1, y1))
-                end = self.world_to_screen((x1 + w, y1))
-                pygame.draw.line(screen, exit_color, start, end, 4)
-            elif exit_edge == "up":
-                start = self.world_to_screen((x1, y1 + h))
-                end = self.world_to_screen((x1 + w, y1 + h))
-                pygame.draw.line(screen, exit_color, start, end, 4)
+                # 步梯：出口边缘绿色
+                exit_color = (0, 180, 0)
+                if exit_edge == "left":
+                    pygame.draw.line(screen, exit_color,
+                                    (full_rect.left, full_rect.top), (full_rect.left, full_rect.bottom), 5)
+                elif exit_edge == "right":
+                    pygame.draw.line(screen, exit_color,
+                                    (full_rect.right, full_rect.top), (full_rect.right, full_rect.bottom), 5)
+                elif exit_edge == "down":
+                    pygame.draw.line(screen, exit_color,
+                                    (full_rect.left, full_rect.bottom), (full_rect.right, full_rect.bottom), 5)
+                else:  # up
+                    pygame.draw.line(screen, exit_color,
+                                    (full_rect.left, full_rect.top), (full_rect.right, full_rect.top), 5)
 
-            # 绘制出口方向箭头
-            arrow_map = {"left": "←", "right": "→", "up": "↑", "down": "↓"}
-            arrow_txt = arrow_map.get(exit_edge, "↓")
-            txt_surf = font.render(arrow_txt, True, WHITE)
-            screen.blit(txt_surf, (rect.centerx - txt_surf.get_width()/2, rect.centery - txt_surf.get_height()/2))
+                # 步梯：绿色箭头指向出口
+                arrow_color = (0, 180, 0)
+                cx, cy = full_rect.centerx, full_rect.centery
+                arrow_size = min(full_rect.width, full_rect.height) // 4
+
+                if exit_edge == "left":
+                    pygame.draw.line(screen, arrow_color, (cx + arrow_size, cy), (cx - arrow_size, cy), 3)
+                    pygame.draw.line(screen, arrow_color, (cx - arrow_size, cy), (cx - arrow_size//2, cy - arrow_size//2), 3)
+                    pygame.draw.line(screen, arrow_color, (cx - arrow_size, cy), (cx - arrow_size//2, cy + arrow_size//2), 3)
+                elif exit_edge == "right":
+                    pygame.draw.line(screen, arrow_color, (cx - arrow_size, cy), (cx + arrow_size, cy), 3)
+                    pygame.draw.line(screen, arrow_color, (cx + arrow_size, cy), (cx + arrow_size//2, cy - arrow_size//2), 3)
+                    pygame.draw.line(screen, arrow_color, (cx + arrow_size, cy), (cx + arrow_size//2, cy + arrow_size//2), 3)
+                elif exit_edge == "down":
+                    pygame.draw.line(screen, arrow_color, (cx, cy - arrow_size), (cx, cy + arrow_size), 3)
+                    pygame.draw.line(screen, arrow_color, (cx, cy + arrow_size), (cx - arrow_size//2, cy + arrow_size//2), 3)
+                    pygame.draw.line(screen, arrow_color, (cx, cy + arrow_size), (cx + arrow_size//2, cy + arrow_size//2), 3)
+                else:  # up
+                    pygame.draw.line(screen, arrow_color, (cx, cy + arrow_size), (cx, cy - arrow_size), 3)
+                    pygame.draw.line(screen, arrow_color, (cx, cy - arrow_size), (cx - arrow_size//2, cy - arrow_size//2), 3)
+                    pygame.draw.line(screen, arrow_color, (cx, cy - arrow_size), (cx + arrow_size//2, cy - arrow_size//2), 3)
+
+            else:
+                # 扶梯：分为运送区和禁行区
+                is_horizontal = (w > h)
+                transport_ratio = 0.5
+
+                if is_horizontal:
+                    # 横向扶梯：水平分隔线
+                    split_y = full_rect.top + int(full_rect.height * transport_ratio)
+                    transport_rect = pygame.Rect(full_rect.left, full_rect.top,
+                                                 full_rect.width, split_y - full_rect.top)
+                    nogo_rect = pygame.Rect(full_rect.left, split_y,
+                                            full_rect.width, full_rect.bottom - split_y)
+                    split_line = ((full_rect.left, split_y), (full_rect.right, split_y))
+                else:
+                    # 纵向扶梯：垂直分隔线
+                    split_x = full_rect.left + int(full_rect.width * transport_ratio)
+                    transport_rect = pygame.Rect(full_rect.left, full_rect.top,
+                                                 split_x - full_rect.left, full_rect.height)
+                    nogo_rect = pygame.Rect(split_x, full_rect.top,
+                                            full_rect.right - split_x, full_rect.height)
+                    split_line = ((split_x, full_rect.top), (split_x, full_rect.bottom))
+
+                # 绘制运送区（灰色）
+                pygame.draw.rect(screen, (180, 180, 180), transport_rect)
+
+                # 绘制禁行区（白色背景 + 红色X斜线）
+                pygame.draw.rect(screen, WHITE, nogo_rect)
+
+                # 使用clip确保斜线不溢出
+                line_color = (200, 60, 60)
+                line_spacing = 8
+                screen.set_clip(nogo_rect)
+
+                # 正斜线 + 反斜线 = X
+                for i in range(-nogo_rect.height, nogo_rect.width + nogo_rect.height, line_spacing):
+                    pygame.draw.line(screen, line_color,
+                                    (nogo_rect.left + i, nogo_rect.top),
+                                    (nogo_rect.left + i - nogo_rect.height, nogo_rect.bottom), 1)
+                    pygame.draw.line(screen, line_color,
+                                    (nogo_rect.left + i, nogo_rect.top),
+                                    (nogo_rect.left + i + nogo_rect.height, nogo_rect.bottom), 1)
+
+                screen.set_clip(None)
+
+                # 绘制边框（黑色）
+                pygame.draw.rect(screen, BLACK, full_rect, 2)
+                # 绘制分隔线
+                pygame.draw.line(screen, BLACK, split_line[0], split_line[1], 2)
+
+                # 扶梯：出口边也分为两部分
+                # - 运送区出口：绿色（可出人）
+                # - 禁行区出口：黑色（不能出人）
+                exit_color = (0, 180, 0)
+
+                if is_horizontal:
+                    # 横向扶梯：出口边分上下两部分
+                    if exit_edge == "left":
+                        # 左边上半（运送区）绿色，左边下半（禁行区）黑色
+                        pygame.draw.line(screen, exit_color,
+                                        (full_rect.left, full_rect.top), (full_rect.left, split_y), 5)
+                        pygame.draw.line(screen, BLACK,
+                                        (full_rect.left, split_y), (full_rect.left, full_rect.bottom), 5)
+                    elif exit_edge == "right":
+                        # 右边上半（运送区）绿色，右边下半（禁行区）黑色
+                        pygame.draw.line(screen, exit_color,
+                                        (full_rect.right, full_rect.top), (full_rect.right, split_y), 5)
+                        pygame.draw.line(screen, BLACK,
+                                        (full_rect.right, split_y), (full_rect.right, full_rect.bottom), 5)
+                    elif exit_edge == "down":
+                        # 下边全绿（运送区在上，但出口在下，整条出口都是运送区的出口）
+                        # 实际上横向扶梯不应该有down/up出口，但为完整性保留
+                        pygame.draw.line(screen, exit_color,
+                                        (full_rect.left, full_rect.bottom), (full_rect.right, full_rect.bottom), 5)
+                    else:  # up
+                        pygame.draw.line(screen, exit_color,
+                                        (full_rect.left, full_rect.top), (full_rect.right, full_rect.top), 5)
+                else:
+                    # 纵向扶梯：出口边分左右两部分
+                    if exit_edge == "down":
+                        # 下边左半（运送区）绿色，下边右半（禁行区）黑色
+                        pygame.draw.line(screen, exit_color,
+                                        (full_rect.left, full_rect.bottom), (split_x, full_rect.bottom), 5)
+                        pygame.draw.line(screen, BLACK,
+                                        (split_x, full_rect.bottom), (full_rect.right, full_rect.bottom), 5)
+                    elif exit_edge == "up":
+                        # 上边左半（运送区）绿色，上边右半（禁行区）黑色
+                        pygame.draw.line(screen, exit_color,
+                                        (full_rect.left, full_rect.top), (split_x, full_rect.top), 5)
+                        pygame.draw.line(screen, BLACK,
+                                        (split_x, full_rect.top), (full_rect.right, full_rect.top), 5)
+                    elif exit_edge == "left":
+                        # 纵向扶梯不应该有left/right出口，但为完整性保留
+                        pygame.draw.line(screen, exit_color,
+                                        (full_rect.left, full_rect.top), (full_rect.left, full_rect.bottom), 5)
+                    else:  # right
+                        pygame.draw.line(screen, exit_color,
+                                        (full_rect.right, full_rect.top), (full_rect.right, full_rect.bottom), 5)
+
+                # 扶梯：绿色箭头在运送区中央
+                arrow_color = (0, 180, 0)
+                cx, cy = transport_rect.centerx, transport_rect.centery
+                arrow_size = min(transport_rect.width, transport_rect.height) // 3
+
+                if exit_edge == "left":
+                    pygame.draw.line(screen, arrow_color, (cx + arrow_size, cy), (cx - arrow_size, cy), 3)
+                    pygame.draw.line(screen, arrow_color, (cx - arrow_size, cy), (cx - arrow_size//2, cy - arrow_size//2), 3)
+                    pygame.draw.line(screen, arrow_color, (cx - arrow_size, cy), (cx - arrow_size//2, cy + arrow_size//2), 3)
+                elif exit_edge == "right":
+                    pygame.draw.line(screen, arrow_color, (cx - arrow_size, cy), (cx + arrow_size, cy), 3)
+                    pygame.draw.line(screen, arrow_color, (cx + arrow_size, cy), (cx + arrow_size//2, cy - arrow_size//2), 3)
+                    pygame.draw.line(screen, arrow_color, (cx + arrow_size, cy), (cx + arrow_size//2, cy + arrow_size//2), 3)
+                elif exit_edge == "down":
+                    pygame.draw.line(screen, arrow_color, (cx, cy - arrow_size), (cx, cy + arrow_size), 3)
+                    pygame.draw.line(screen, arrow_color, (cx, cy + arrow_size), (cx - arrow_size//2, cy + arrow_size//2), 3)
+                    pygame.draw.line(screen, arrow_color, (cx, cy + arrow_size), (cx + arrow_size//2, cy + arrow_size//2), 3)
+                else:  # up
+                    pygame.draw.line(screen, arrow_color, (cx, cy + arrow_size), (cx, cy - arrow_size), 3)
+                    pygame.draw.line(screen, arrow_color, (cx, cy - arrow_size), (cx - arrow_size//2, cy - arrow_size//2), 3)
+                    pygame.draw.line(screen, arrow_color, (cx, cy - arrow_size), (cx + arrow_size//2, cy - arrow_size//2), 3)
 
         # 4. 绘制墙壁/围栏
         for start, end in self.walls_screen:
             pygame.draw.line(screen, COLORS['wall'], start, end, 3)
+
+        # 4.1 绘制T形边界墙（黑色粗线，与闸机相连）
+        # 闸机位置: b(45-60), c(75-90), d(105-120) 在Y=70
+        #          e(45-60), f(75-90), g(105-120) 在Y=10
+        #          a(30-50) 在X=0, zi(30-50) 在X=150
+        boundary_walls = [
+            # 左侧走廊
+            ((0, 0), (0, 30)),       # 左墙下段
+            ((0, 50), (0, 80)),      # 左墙上段 (闸机a在30-50)
+            ((0, 80), (20, 80)),     # 左廊顶边
+            ((0, 0), (20, 0)),       # 左廊底边
+            # 主厅上边 (Y=70, 闸机b,c,d间隔)
+            ((20, 70), (45, 70)),
+            ((60, 70), (75, 70)),
+            ((90, 70), (105, 70)),
+            ((120, 70), (150, 70)),
+            # 主厅下边 (Y=10, 闸机e,f,g间隔)
+            ((20, 10), (45, 10)),
+            ((60, 10), (75, 10)),
+            ((90, 10), (105, 10)),
+            ((120, 10), (150, 10)),
+            # 右墙 (闸机zi在30-50)
+            ((150, 10), (150, 30)),
+            ((150, 50), (150, 70)),
+            # 连接处
+            ((20, 70), (20, 80)),    # 左廊与主厅上连接
+            ((20, 0), (20, 10)),     # 左廊与主厅下连接
+        ]
+        for start, end in boundary_walls:
+            s = self.world_to_screen(start)
+            e = self.world_to_screen(end)
+            pygame.draw.line(screen, BLACK, s, e, 3)
 
         # 5. 绘制闸机/出口
         for exit in self.env.exits:

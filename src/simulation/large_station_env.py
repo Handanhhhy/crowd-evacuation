@@ -478,16 +478,26 @@ class LargeStationEnv(gym.Env):
         Args:
             x, y: 位置坐标
             margin: 安全边距（避免太靠近障碍物）
+
+        注意：
+            - 步梯：整体可通行（没有禁行区）
+            - 扶梯：整体都是障碍物（运送区+禁行区都不能站人）
+            - 电梯：完全禁行
         """
-        # 检查所有扶梯/步梯
+        # 检查扶梯（整体都是障碍物，步梯跳过）
         for esc in self.escalators:
+            # 步梯没有禁行区，可以通行
+            if 'stair' in esc.id:
+                continue
+
+            # 扶梯整体都是障碍物
             ex, ey = esc.position
             w, h = esc.size
             if (ex - w/2 - margin <= x <= ex + w/2 + margin and
                 ey - h/2 - margin <= y <= ey + h/2 + margin):
                 return True
 
-        # 检查电梯
+        # 检查电梯（完全禁行）
         if hasattr(self, 'elevator'):
             ex, ey = self.elevator["position"]
             w, h = self.elevator["size"]
@@ -720,30 +730,57 @@ class LargeStationEnv(gym.Env):
         return spawned
 
     def _get_escalator_exit_position(self, esc: Escalator) -> np.ndarray:
-        """获取扶梯出口位置"""
+        """获取扶梯出口位置（只在运送区出口生成）
+
+        扶梯分为运送区和禁行区：
+        - 横向扶梯(w>h)：上半是运送区，下半是禁行区
+        - 纵向扶梯(h>w)：左半是运送区，右半是禁行区
+
+        行人只能从运送区出口出来（绿色部分），不能从禁行区出口出来（黑色部分）
+        """
         x, y = esc.position
         w, h = esc.size
+        is_horizontal = (w > h)
+
+        # 步梯：整体都是运送区，可以在整个出口范围生成
+        is_stairs = 'stair' in esc.id
 
         if esc.exit_edge == "left":
-            return np.array([
-                x - w/2 - 0.5,
-                y + np.random.uniform(-h/2 + 0.5, h/2 - 0.5)
-            ])
+            if is_stairs:
+                # 步梯：整个出口边
+                exit_y = y + np.random.uniform(-h/2 + 0.5, h/2 - 0.5)
+            else:
+                # 扶梯横向：只在上半部分（运送区）出口
+                # 上半部分 y 范围: [y, y + h/2]
+                exit_y = y + np.random.uniform(0.5, h/2 - 0.5)
+            return np.array([x - w/2 - 0.5, exit_y])
+
         elif esc.exit_edge == "right":
-            return np.array([
-                x + w/2 + 0.5,
-                y + np.random.uniform(-h/2 + 0.5, h/2 - 0.5)
-            ])
+            if is_stairs:
+                exit_y = y + np.random.uniform(-h/2 + 0.5, h/2 - 0.5)
+            else:
+                # 扶梯横向：只在上半部分（运送区）出口
+                exit_y = y + np.random.uniform(0.5, h/2 - 0.5)
+            return np.array([x + w/2 + 0.5, exit_y])
+
         elif esc.exit_edge == "down":
-            return np.array([
-                x + np.random.uniform(-w/2 + 0.5, w/2 - 0.5),
-                y - h/2 - 0.5
-            ])
+            if is_stairs:
+                # 步梯：整个出口边
+                exit_x = x + np.random.uniform(-w/2 + 0.5, w/2 - 0.5)
+            else:
+                # 扶梯纵向：只在左半部分（运送区）出口
+                # 左半部分 x 范围: [x - w/2, x]
+                exit_x = x + np.random.uniform(-w/2 + 0.5, -0.5)
+            return np.array([exit_x, y - h/2 - 0.5])
+
         elif esc.exit_edge == "up":
-            return np.array([
-                x + np.random.uniform(-w/2 + 0.5, w/2 - 0.5),
-                y + h/2 + 0.5
-            ])
+            if is_stairs:
+                exit_x = x + np.random.uniform(-w/2 + 0.5, w/2 - 0.5)
+            else:
+                # 扶梯纵向：只在左半部分（运送区）出口
+                exit_x = x + np.random.uniform(-w/2 + 0.5, -0.5)
+            return np.array([exit_x, y + h/2 + 0.5])
+
         else:
             return np.array([x, y])
 
@@ -1276,7 +1313,7 @@ class LargeStationEnv(gym.Env):
             return self._process_evacuation_optimized()
 
         evacuated_this_step = 0
-        evacuation_radius = 3.0
+        evacuation_radius = 5.0  # 增大疏散检测半径
 
         peds_to_remove_ids = set()
 
@@ -1297,7 +1334,7 @@ class LargeStationEnv(gym.Env):
 
     def _process_evacuation_optimized(self) -> int:
         """优化版：GPU上处理疏散"""
-        evacuation_radius = 3.0
+        evacuation_radius = 5.0  # 增大疏散检测半径
         evacuated = self.sfm.remove_pedestrians_near_exits(
             self._exit_positions_gpu,
             radius=evacuation_radius
