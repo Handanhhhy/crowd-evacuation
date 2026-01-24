@@ -42,23 +42,35 @@ GRAY = (128, 128, 128)
 BG_COLOR = (245, 245, 245)
 TEXT_COLOR = (50, 50, 50)
 
-# 密度颜色映射（从蓝色到红色）
-def density_to_color(density, max_density=1.0):
-    """将密度值映射到颜色（蓝色=低密度，红色=高密度）"""
-    density = np.clip(density / max_density, 0.0, 1.0)
+# 密度颜色映射（改进版 - 热力图风格）
+def density_to_color(density, max_val=1.0):
+    """将密度值映射到热力图颜色"""
+    # 归一化
+    val = np.clip(density / max_val, 0.0, 1.0)
     
-    if density < 0.5:
-        # 蓝色到青色
-        r = 0
-        g = int(255 * density * 2)
-        b = 255
-    else:
-        # 青色到黄色到红色
-        r = int(255 * (density - 0.5) * 2)
-        g = 255
-        b = int(255 * (1 - (density - 0.5) * 2))
+    # 颜色点 (值, (R, G, B)) - 类似于 Jet/Turbo 
+    colors = [
+        (0.0, (0, 0, 128)),    # 深蓝 (底色)
+        (0.2, (0, 0, 255)),    # 蓝
+        (0.4, (0, 255, 255)),  # 青
+        (0.6, (0, 255, 0)),    # 绿
+        (0.8, (255, 255, 0)),  # 黄
+        (1.0, (255, 0, 0))     # 红
+    ]
     
-    return (r, g, b)
+    # 找到区间
+    for i in range(len(colors) - 1):
+        if val <= colors[i+1][0]:
+            c1 = colors[i]
+            c2 = colors[i+1]
+            ratio = (val - c1[0]) / (c2[0] - c1[0])
+            
+            r = int(c1[1][0] + ratio * (c2[1][0] - c1[1][0]))
+            g = int(c1[1][1] + ratio * (c2[1][1] - c1[1][1]))
+            b = int(c1[1][2] + ratio * (c2[1][2] - c1[1][2]))
+            return (r, g, b)
+            
+    return colors[-1][1]
 
 
 class DensityFieldVisualizer:
@@ -109,6 +121,7 @@ class DensityFieldVisualizer:
         self.paused = False
         self.running = True
         self.show_error = False  # 是否显示误差图
+        self.auto_scale = True   # 是否自动缩放颜色范围
         
         # 加载所有样本到内存
         self._load_samples()
@@ -194,23 +207,15 @@ class DensityFieldVisualizer:
         y_offset: int,
         title: str,
         font: pygame.font.Font = None,
+        max_val: float = 1.0,
     ):
-        """绘制密度场
-        
-        Args:
-            screen: Pygame surface
-            density: 密度场 [grid_w, grid_h]
-            x_offset: X偏移
-            y_offset: Y偏移
-            title: 标题
-            font: 字体
-        """
+        """绘制密度场"""
         if font is None:
             font = pygame.font.Font(None, 16)
         
         # 绘制标题
-        title_surface = font.render(title, True, TEXT_COLOR)
-        screen.blit(title_surface, (x_offset + self.panel_width // 2 - title_surface.get_width() // 2, y_offset - 25))
+        title_surface = font.render(f"{title} (Max: {np.max(density):.2f})", True, TEXT_COLOR)
+        screen.blit(title_surface, (x_offset, y_offset - 25))
         
         # 绘制网格
         for i in range(self.grid_w):
@@ -220,7 +225,7 @@ class DensityFieldVisualizer:
                 
                 # 获取密度值
                 d = density[i, j]
-                color = density_to_color(d)
+                color = density_to_color(d, max_val)
                 
                 # 绘制单元格
                 rect = pygame.Rect(x, y, self.cell_size, self.cell_size)
@@ -283,6 +288,7 @@ class DensityFieldVisualizer:
             "  [Right] Next Sample",
             "  [Left] Previous Sample",
             "  [E] Toggle Error Map",
+            "  [A] Toggle Auto Scale",
             "  [ESC] Exit",
         ]
         
@@ -322,6 +328,15 @@ class DensityFieldVisualizer:
         
         sample = self.samples[self.current_sample_idx]
         
+        # 计算最大值用于自动缩放
+        max_val = 1.0
+        if self.auto_scale:
+            max_current = np.max(sample['current'])
+            max_pred = np.max(sample['predicted'])
+            max_true = np.max(sample['true'])
+            # 取三者最大值，并设个下限避免除以零或过度放大噪声
+            max_val = max(0.1, max(max_current, max_pred, max_true))
+        
         # 计算面板位置
         panel_x = self.margin
         panel_y = self.margin + 25
@@ -342,8 +357,9 @@ class DensityFieldVisualizer:
                 sample['predicted'],
                 panel_x + self.panel_width + self.margin,
                 panel_y,
-                "Predicted Density",
+                "Predicted",
                 font,
+                max_val,
             )
             
             self._draw_density_field(
@@ -353,6 +369,7 @@ class DensityFieldVisualizer:
                 panel_y,
                 "Ground Truth",
                 font,
+                max_val,
             )
         else:
             # 显示密度场模式
@@ -361,8 +378,9 @@ class DensityFieldVisualizer:
                 sample['current'],
                 panel_x,
                 panel_y,
-                "Current Density (Input)",
+                "Current (Input)",
                 font,
+                max_val,
             )
             
             self._draw_density_field(
@@ -370,8 +388,9 @@ class DensityFieldVisualizer:
                 sample['predicted'],
                 panel_x + self.panel_width + self.margin,
                 panel_y,
-                "Predicted Density (5s later)",
+                "Predicted (5s)",
                 font,
+                max_val,
             )
             
             self._draw_density_field(
@@ -379,8 +398,9 @@ class DensityFieldVisualizer:
                 sample['true'],
                 panel_x + (self.panel_width + self.margin) * 2,
                 panel_y,
-                "Ground Truth (5s later)",
+                "Ground Truth (5s)",
                 font,
+                max_val,
             )
         
         # 绘制信息面板
@@ -401,6 +421,8 @@ class DensityFieldVisualizer:
                 self.current_sample_idx = (self.current_sample_idx - 1) % len(self.samples)
             elif event.key == pygame.K_e:
                 self.show_error = not self.show_error
+            elif event.key == pygame.K_a:
+                self.auto_scale = not self.auto_scale
     
     def run(self):
         """运行可视化"""
