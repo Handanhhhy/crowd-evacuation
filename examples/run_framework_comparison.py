@@ -130,6 +130,11 @@ def run_single_episode(
     done = False
     truncated = False
 
+    # 获取动作空间信息
+    from gymnasium import spaces
+    is_discrete = isinstance(env.action_space, spaces.Discrete)
+    n_actions = env.action_space.n if is_discrete else env.action_space.shape[0]
+
     while not (done or truncated) and step < max_steps:
         # 根据方案选择动作
         if method_config.get("use_ppo_guidance") and hasattr(env, '_ppo_model'):
@@ -137,10 +142,13 @@ def run_single_episode(
             action, _ = env._ppo_model.predict(obs, deterministic=True)
         elif method_config.get("use_dynamic_routing"):
             # 动态分流：基于规则的动作选择
-            action = _get_routing_action(env, method_config.get("use_density_prediction", False))
+            action = _get_routing_action(env, method_config.get("use_density_prediction", False), is_discrete)
         else:
-            # 基线/仅预测：均匀分配动作
-            action = np.zeros(env.action_space.shape[0])
+            # 基线/仅预测：随机或均匀分配
+            if is_discrete:
+                action = env.action_space.sample()  # 随机选择出口
+            else:
+                action = np.zeros(n_actions)
 
         obs, reward, done, truncated, info = env.step(action)
         total_reward += reward
@@ -149,24 +157,22 @@ def run_single_episode(
         # 记录统计
         if 'max_density' in info:
             max_density = max(max_density, info['max_density'])
-        if 'avg_density' in info:
-            density_history.append(info['avg_density'])
-        if info.get('congestion_detected', False):
+            density_history.append(info['max_density'])
+        if info.get('danger_count', 0) > 0:
             congestion_events += 1
-        if info.get('crush_risk', False):
+        if info.get('danger_count', 0) > 3:  # 多个危险区域视为踩踏风险
             crush_risk_events += 1
-        if 'exit_loads' in info:
-            exit_loads.append(info['exit_loads'])
+        if 'evacuated_by_exit' in info:
+            exit_loads.append(list(info['evacuated_by_exit'].values()))
 
     # 计算结果
     evacuated = info.get('evacuated', 0)
-    total_peds = info.get('total_pedestrians', env.n_pedestrians)
+    total_peds = env.n_pedestrians
     evacuation_rate = evacuated / total_peds if total_peds > 0 else 0
 
     # 出口负载方差（均衡度）
-    if exit_loads:
-        final_loads = exit_loads[-1] if isinstance(exit_loads[-1], (list, np.ndarray)) else [0]
-        exit_load_variance = np.var(final_loads) if len(final_loads) > 1 else 0
+    if exit_loads and len(exit_loads[-1]) > 1:
+        exit_load_variance = np.var(exit_loads[-1])
     else:
         exit_load_variance = 0
 
@@ -183,25 +189,36 @@ def run_single_episode(
     }
 
 
-def _get_routing_action(env: LargeStationEnv, use_prediction: bool = False) -> np.ndarray:
+def _get_routing_action(env: LargeStationEnv, use_prediction: bool = False, is_discrete: bool = True):
     """基于规则的动态分流动作"""
-    action = np.zeros(env.action_space.shape[0])
 
-    # 获取当前出口负载
-    if hasattr(env, 'exit_loads'):
-        loads = np.array(env.exit_loads)
-        if len(loads) > 0 and np.sum(loads) > 0:
-            # 负载均衡：减少高负载出口的权重
-            normalized = loads / (np.sum(loads) + 1e-6)
-            # 动作：负值减少该出口吸引力，正值增加
-            action = 0.5 - normalized  # 负载高的出口动作为负
+    if is_discrete:
+        # Discrete动作空间：选择负载最小的出口
+        n_exits = env.action_space.n
 
-    # 如果使用密度预测，可以进一步调整
-    if use_prediction and hasattr(env, 'density_predictor'):
-        # 预测未来密度，调整分流策略
-        pass  # 预留密度预测集成接口
+        # 获取当前出口负载
+        if hasattr(env, 'evacuated_by_exit') and env.evacuated_by_exit:
+            loads = np.array([env.evacuated_by_exit.get(i, 0) for i in range(n_exits)])
+        else:
+            loads = np.zeros(n_exits)
 
-    return np.clip(action, -1, 1)
+        # 选择负载最小的出口（负载均衡策略）
+        # 添加小随机扰动避免总是选同一个
+        scores = -loads + np.random.uniform(0, 0.1, n_exits)
+        action = int(np.argmax(scores))
+
+        return action
+    else:
+        # Box动作空间：返回连续动作
+        action = np.zeros(env.action_space.shape[0])
+
+        if hasattr(env, 'exit_loads'):
+            loads = np.array(env.exit_loads)
+            if len(loads) > 0 and np.sum(loads) > 0:
+                normalized = loads / (np.sum(loads) + 1e-6)
+                action = 0.5 - normalized
+
+        return np.clip(action, -1, 1)
 
 
 def run_method_experiments(
