@@ -150,12 +150,22 @@ class DensityFieldPredictor:
         if model_path and Path(model_path).exists():
             state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
             model.load_state_dict(state_dict)
-            print(f"[DensityPredictor] 加载模型: {model_path}")
+            print(f"[DensityPredictor] 加载模型: {model_path} (设备: {self.device})")
         else:
             print(f"[DensityPredictor] 使用未训练模型 (设备: {self.device})")
             
         model = model.to(self.device)
         model.eval()
+        
+        # 验证模型确实在指定设备上
+        if self.device == 'cuda' and torch.cuda.is_available():
+            next_param = next(model.parameters())
+            actual_device = next_param.device
+            if actual_device.type != 'cuda':
+                print(f"[警告] 模型参数在 {actual_device} 上，但期望在 cuda 上")
+            else:
+                print(f"[DensityPredictor] 模型已加载到 GPU: {torch.cuda.get_device_name(0)}")
+        
         return model
     
     def _compute_exit_distance_field(self) -> np.ndarray:
@@ -304,6 +314,9 @@ class DensityFieldPredictor:
         frames = [f.to_tensor(self.device) for f in self.history_frames[-self.history_length:]]
         x = torch.stack(frames, dim=0).unsqueeze(0)  # [1, seq_len, 4, h, w]
         
+        # 确保输入张量在正确的设备上
+        x = x.to(self.device)
+        
         # 模型推理
         self.model.eval()
         prediction, _ = self.model(x)
@@ -332,6 +345,9 @@ class DensityFieldPredictor:
         # 构建输入张量
         frames = [f.to_tensor(self.device) for f in self.history_frames[-self.history_length:]]
         x = torch.stack(frames, dim=0).unsqueeze(0)
+        
+        # 确保输入张量在正确的设备上
+        x = x.to(self.device)
         
         # 多步预测
         self.model.eval()

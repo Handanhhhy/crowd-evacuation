@@ -23,6 +23,7 @@ import json
 from datetime import datetime
 from typing import Dict, List, Tuple
 from tqdm import tqdm
+import torch
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
@@ -43,6 +44,7 @@ class ExperimentRunner:
         dt: float = 0.1,
         prediction_model_path: str = None,
         output_dir: str = "outputs/experiments",
+        device: str = "auto",
     ):
         """
         Args:
@@ -51,6 +53,7 @@ class ExperimentRunner:
             dt: 时间步长
             prediction_model_path: 预测模型路径
             output_dir: 输出目录
+            device: 计算设备 ('auto', 'cpu', 'cuda')
         """
         self.flow_level = flow_level
         self.max_steps = max_steps
@@ -58,6 +61,31 @@ class ExperimentRunner:
         self.prediction_model_path = prediction_model_path
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 设备检测
+        if device == "auto":
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            else:
+                self.device = "cpu"
+        else:
+            self.device = device
+        
+        # 打印设备信息
+        print("\n" + "=" * 60)
+        print("设备信息")
+        print("=" * 60)
+        print(f"  - PyTorch版本: {torch.__version__}")
+        print(f"  - CUDA可用: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"  - CUDA版本: {torch.version.cuda}")
+            print(f"  - GPU数量: {torch.cuda.device_count()}")
+            for i in range(torch.cuda.device_count()):
+                print(f"  - GPU {i}: {torch.cuda.get_device_name(i)}")
+        print(f"  - 使用设备: {self.device}")
+        if self.device == "cuda":
+            print(f"  - 当前GPU: {torch.cuda.get_device_name(0)}")
+        print("=" * 60 + "\n")
         
     def create_env(self) -> LargeStationEnv:
         """创建环境"""
@@ -86,6 +114,7 @@ class ExperimentRunner:
         return DensityFieldPredictor(
             exits=exits,
             model_path=self.prediction_model_path,
+            device=self.device,  # 显式传递设备参数
         )
     
     def run_baseline(self, n_runs: int = 5) -> List[Dict]:
@@ -468,6 +497,9 @@ def main():
                         help="输出目录")
     parser.add_argument("--baseline-only", action="store_true", help="仅运行基线实验")
     parser.add_argument("--prediction-only", action="store_true", help="仅运行预测实验")
+    parser.add_argument("--device", type=str, default="auto",
+                        choices=["auto", "cpu", "cuda"],
+                        help="计算设备 (默认: auto)")
     
     args = parser.parse_args()
     
@@ -476,6 +508,7 @@ def main():
         max_steps=args.max_steps,
         prediction_model_path=args.model_path,
         output_dir=args.output_dir,
+        device=args.device,
     )
     
     baseline_results = []
