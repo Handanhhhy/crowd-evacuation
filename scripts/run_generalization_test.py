@@ -39,6 +39,7 @@ def test_density_predictor_generalization(
     n_episodes: int = 3,
     max_steps: int = 500,
     quick: bool = False,
+    device: str = "auto",
 ) -> Dict[str, Any]:
     """测试密度预测模型在不同流量下的准确率
 
@@ -105,7 +106,7 @@ def test_density_predictor_generalization(
         predictor = DensityFieldPredictor(
             exits=exits_info,
             model_path=model_path,
-            device='cpu',
+            device=device,
         )
 
         level_results = {
@@ -584,6 +585,9 @@ def main():
                         help="每个级别测试的episode数")
     parser.add_argument("--output", type=str, default=None,
                         help="输出报告路径")
+    parser.add_argument("--device", type=str, default="auto",
+                        choices=["auto", "cpu", "cuda", "mps"],
+                        help="计算设备 (默认: auto)")
 
     args = parser.parse_args()
 
@@ -592,6 +596,7 @@ def main():
     print("=" * 60)
     print(f"模式: {'快速' if args.quick else '完整'}")
     print(f"流量级别: {args.flow_levels or ['small', 'medium', 'large']}")
+    print(f"计算设备: {args.device}")
 
     start_time = time.time()
 
@@ -606,6 +611,7 @@ def main():
             flow_levels=args.flow_levels,
             n_episodes=args.n_episodes,
             quick=args.quick,
+            device=args.device,
         )
 
     # 2. PPO模型验证

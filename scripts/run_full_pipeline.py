@@ -21,6 +21,7 @@ import json
 import sys
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -145,7 +146,7 @@ def run_step(step: dict, quick: bool = False) -> dict:
 
 def run_pipeline(
     start_step: int = 1,
-    only_step: int = None,
+    only_step: Optional[int] = None,
     skip_ablation: bool = False,
     quick: bool = False,
 ) -> dict:
