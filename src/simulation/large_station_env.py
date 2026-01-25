@@ -1321,14 +1321,27 @@ class LargeStationEnv(gym.Env):
         for i, exit_obj in enumerate(self.exits):
             exit_pos = torch.tensor(exit_obj.position, device=positions.device, dtype=torch.float32)
             exit_positions.append(exit_pos)
-            # 计算目标在该出口5m内的活跃行人数
+            # 计算目标在该出口10m内的活跃行人数（放宽检测半径）
             dist = torch.norm(targets - exit_pos, dim=1)
-            exit_loads[i] = ((dist < 5.0) & is_active).sum()
+            exit_loads[i] = ((dist < 10.0) & is_active).sum()
 
         # 找到推荐出口的索引和位置
         rec_idx = self.exits.index(recommended_exit)
         rec_pos = exit_positions[rec_idx]
         rec_load = exit_loads[rec_idx]
+
+        # 调试日志（每100步输出一次）
+        if hasattr(self, '_guidance_debug_counter'):
+            self._guidance_debug_counter += 1
+        else:
+            self._guidance_debug_counter = 0
+
+        debug_this_step = (self._guidance_debug_counter % 100 == 0)
+        total_switched = 0
+
+        if debug_this_step:
+            loads_str = ", ".join([f"{self.exits[i].name}:{int(exit_loads[i])}" for i in range(len(self.exits))])
+            print(f"[Guidance] 推荐出口: {recommended_exit.name}, 各出口负载: [{loads_str}]")
 
         # 遍历其他出口，将超载出口的部分行人引导到推荐出口
         for i, exit_obj in enumerate(self.exits):
@@ -1339,9 +1352,9 @@ class LargeStationEnv(gym.Env):
 
             exit_pos = exit_positions[i]
 
-            # 找到目标指向该出口的活跃行人
+            # 找到目标指向该出口的活跃行人（放宽检测半径）
             dist_to_exit = torch.norm(targets - exit_pos, dim=1)
-            mask = (dist_to_exit < 5.0) & is_active
+            mask = (dist_to_exit < 10.0) & is_active
 
             if not mask.any():
                 continue
@@ -1350,15 +1363,22 @@ class LargeStationEnv(gym.Env):
             dist_to_rec = torch.norm(positions - rec_pos, dim=1)
             dist_to_current = torch.norm(positions - exit_pos, dim=1)
 
-            # 切换条件：
-            # 1. 负载比 > 1.2（当前出口超载20%以上）
-            # 2. 距离推荐出口不超过当前出口的1.5倍（避免引导到太远的出口）
+            # 切换条件（放宽）：
+            # 1. 负载比 > 1.1（当前出口超载10%以上）
+            # 2. 距离推荐出口不超过当前出口的2.0倍
             load_ratio = exit_loads[i] / (rec_load + 1)
-            should_switch = mask & (load_ratio > 1.2) & (dist_to_rec < dist_to_current * 1.5)
+            should_switch = mask & (load_ratio > 1.1) & (dist_to_rec < dist_to_current * 2.0)
 
             # 更新目标
-            if should_switch.any():
+            n_switched = should_switch.sum().item()
+            if n_switched > 0:
                 targets[should_switch] = rec_pos
+                total_switched += n_switched
+                if debug_this_step:
+                    print(f"  → {exit_obj.name} → {recommended_exit.name}: 切换 {n_switched} 人 (负载比={load_ratio:.2f})")
+
+        if debug_this_step and total_switched > 0:
+            print(f"[Guidance] 本步共切换 {total_switched} 人")
 
         # 更新sfm的目标张量
         self.sfm.targets = targets
