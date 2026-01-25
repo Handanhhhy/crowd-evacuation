@@ -1,0 +1,6 @@
+# AnyLogic 导出数据目录
+exported_data/
+
+# 临时文件
+*.tmp
+*.bak
