@@ -1,0 +1,45 @@
+{
+  "pipeline_start": "2026-01-25T01:50:21.488667",
+  "mode": "normal",
+  "skip_ablation": false,
+  "steps": [
+    {
+      "step_id": 1,
+      "name": "density_predictor",
+      "description": "用Jülich真实数据训练密度预测模型",
+      "success": true,
+      "return_code": 0,
+      "duration_seconds": 52.022652,
+      "start_time": "2026-01-25T01:50:21.488801",
+      "end_time": "2026-01-25T01:51:13.511453",
+      "output_file": "outputs/models/density_predictor.pt",
+      "output_exists": true
+    },
+    {
+      "step_id": 2,
+      "name": "framework_comparison",
+      "description": "研究框架对比实验（5组方案）",
+      "success": true,
+      "return_code": 0,
+      "duration_seconds": 14059.061249,
+      "start_time": "2026-01-25T01:51:13.511787",
+      "end_time": "2026-01-25T05:45:32.573036",
+      "output_file": "outputs/framework_comparison/comparison_report.json",
+      "output_exists": true
+    },
+    {
+      "step_id": 3,
+      "name": "ablation",
+      "description": "运行消融实验（17组对比）",
+      "success": false,
+      "return_code": 1,
+      "duration_seconds": 1.57788,
+      "start_time": "2026-01-25T05:45:32.573294",
+      "end_time": "2026-01-25T05:45:34.151174",
+      "output_file": "outputs/ablation/summary_report.json",
+      "output_exists": false
+    }
+  ],
+  "pipeline_end": "2026-01-25T05:45:34.151425",
+  "total_duration_seconds": 14112.661781
+}
