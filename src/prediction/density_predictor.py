@@ -239,8 +239,14 @@ class DensityFieldPredictor:
         
         # 统计每个网格的行人
         for ped in pedestrians:
-            pos = ped.get('position', ped.get('pos', np.zeros(2)))
-            vel = ped.get('velocity', ped.get('vel', np.zeros(2)))
+            # 兼容字典和对象两种类型
+            if isinstance(ped, dict):
+                pos = ped.get('position', ped.get('pos', np.zeros(2)))
+                vel = ped.get('velocity', ped.get('vel', np.zeros(2)))
+            else:
+                # PedestrianData 或其他对象类型
+                pos = getattr(ped, 'position', getattr(ped, 'pos', np.zeros(2)))
+                vel = getattr(ped, 'velocity', getattr(ped, 'vel', np.zeros(2)))
             
             if isinstance(pos, (list, tuple)):
                 pos = np.array(pos)

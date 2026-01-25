@@ -40,6 +40,17 @@ except ImportError:
     GPU_SFM_AVAILABLE = False
     print("警告: GPU版SFM不可用，将使用CPU版本")
 
+# GPU优化版社会力模型 (消融实验加速用)
+try:
+    from sfm.social_force_gpu_optimized import (
+        GPUSocialForceModelOptimized,
+        PedestrianData,
+        PEDESTRIAN_TYPE_PARAMS as GPU_OPT_PEDESTRIAN_TYPE_PARAMS
+    )
+    GPU_SFM_OPTIMIZED_AVAILABLE = True
+except ImportError:
+    GPU_SFM_OPTIMIZED_AVAILABLE = False
+
 # 尝试导入轨迹预测器
 try:
     from ml.trajectory_predictor import TrajectoryPredictor
@@ -144,6 +155,7 @@ class MetroEvacuationEnv(gym.Env):
         reward_weights: Optional[Dict[str, float]] = None,
         # GPU加速SFM参数
         use_gpu_sfm: bool = False,
+        use_optimized_gpu_sfm: bool = False,
         sfm_device: str = "auto",
     ):
         """
@@ -160,6 +172,9 @@ class MetroEvacuationEnv(gym.Env):
             trajectory_model_path: Social-LSTM轨迹预测模型路径 (可选)
             enable_neural_prediction: 是否启用神经网络轨迹预测
             trajectory_device: 轨迹预测设备 ('auto'/'cpu'/'cuda'/'mps')
+            use_gpu_sfm: 是否使用GPU版社会力模型
+            use_optimized_gpu_sfm: 是否使用优化版GPU社会力模型 (消融实验加速)
+            sfm_device: SFM计算设备 ('auto'/'cpu'/'cuda'/'mps')
         """
         super().__init__()
 
@@ -196,9 +211,12 @@ class MetroEvacuationEnv(gym.Env):
 
         # GPU加速SFM配置
         self.use_gpu_sfm = use_gpu_sfm and GPU_SFM_AVAILABLE
+        self.use_optimized_gpu_sfm = use_optimized_gpu_sfm and GPU_SFM_OPTIMIZED_AVAILABLE
         self.sfm_device = sfm_device
         if use_gpu_sfm and not GPU_SFM_AVAILABLE:
             print("警告: 请求使用GPU SFM但不可用，将使用CPU版本")
+        if use_optimized_gpu_sfm and not GPU_SFM_OPTIMIZED_AVAILABLE:
+            print("警告: 请求使用优化版GPU SFM但不可用，将使用标准GPU版本")
 
         self.reward_weights = {**REWARD_DEFAULTS, **(reward_weights or {})}
 
@@ -332,8 +350,9 @@ class MetroEvacuationEnv(gym.Env):
         """创建社会力模型实例（包含地铁站场景的障碍物）
 
         如果启用增强行为，将开启等待、犹豫、恐慌等特性
-        支持CPU和GPU(MPS/CUDA)两种模式
+        支持CPU、GPU(MPS/CUDA)和优化版GPU三种模式
         """
+        # 基础SFM参数
         sfm_params = dict(
             tau=0.5,
             A=2000.0,
@@ -350,7 +369,22 @@ class MetroEvacuationEnv(gym.Env):
             gbm_weight=0.3,
         )
 
-        if self.use_gpu_sfm:
+        # 优化版GPU参数 (不支持增强行为，但速度快1000x+)
+        optimized_params = dict(
+            device=self.sfm_device,
+            tau=0.5,
+            A=2000.0,
+            B=0.08,
+            wall_A=5000.0,
+            wall_B=0.1,
+            enable_perturbation=self.enable_enhanced_behaviors,
+            perturbation_sigma=0.05,
+            max_pedestrians=max(self.n_pedestrians * 2, 500),
+        )
+
+        if self.use_optimized_gpu_sfm:
+            sfm = GPUSocialForceModelOptimized(**optimized_params)
+        elif self.use_gpu_sfm:
             sfm = GPUSocialForceModel(device=self.sfm_device, **sfm_params)
         else:
             sfm = SocialForceModel(**sfm_params)
@@ -390,6 +424,10 @@ class MetroEvacuationEnv(gym.Env):
             sfm.add_obstacle(np.array([pos[0] - w/2, pos[1] + h/2]), np.array([pos[0] + w/2, pos[1] + h/2]))
             sfm.add_obstacle(np.array([pos[0] - w/2, pos[1] - h/2]), np.array([pos[0] - w/2, pos[1] + h/2]))
             sfm.add_obstacle(np.array([pos[0] + w/2, pos[1] - h/2]), np.array([pos[0] + w/2, pos[1] + h/2]))
+
+        # 优化版GPU SFM需要一次性同步障碍物到GPU
+        if self.use_optimized_gpu_sfm:
+            sfm.finalize_obstacles()
 
         return sfm
 
