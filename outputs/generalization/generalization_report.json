@@ -1,0 +1,133 @@
+{
+  "timestamp": "2026-01-25T15:17:41.699474",
+  "density_predictor": {
+    "model_path": "/root/github/crowd-evacuation/outputs/models/density_predictor.pt",
+    "flow_levels": {
+      "small": {
+        "mae_mean": 0.05002699424388797,
+        "mae_std": 0.0,
+        "rmse_mean": 0.07420546688814429,
+        "rmse_std": 0.0,
+        "correlation_mean": 0.2446173179469057,
+        "n_samples": 1
+      },
+      "medium": {
+        "mae_mean": 0.0519881914277917,
+        "mae_std": 0.0,
+        "rmse_mean": 0.07736640362832589,
+        "rmse_std": 0.0,
+        "correlation_mean": 0.24556738371611847,
+        "n_samples": 1
+      },
+      "large": {
+        "mae_mean": 0.06020606402089647,
+        "mae_std": 0.0,
+        "rmse_mean": 0.09235824757888894,
+        "rmse_std": 0.0,
+        "correlation_mean": 0.3365235985475135,
+        "n_samples": 1
+      }
+    },
+    "summary": {
+      "overall_mae": 0.05407374989752537,
+      "overall_correlation": 0.2755694334035126,
+      "generalization_gap": 0.004409499667710641
+    }
+  },
+  "ppo_model": {
+    "model_path": "/root/github/crowd-evacuation/outputs/models/ppo_large_station_small.zip",
+    "flow_levels": {
+      "small": {
+        "evacuation_rate_mean": 0.9319999999999999,
+        "evacuation_rate_std": 0.006999999999999951,
+        "evacuation_time_mean": 389.1,
+        "evacuation_time_std": 210.9,
+        "danger_count_mean": 0.0,
+        "total_people": 1000,
+        "within_target": true
+      },
+      "medium": {
+        "evacuation_rate_mean": 0.9652499999999999,
+        "evacuation_rate_std": 0.0042500000000000315,
+        "evacuation_time_mean": 600.0,
+        "evacuation_time_std": 0.0,
+        "danger_count_mean": 0.0,
+        "total_people": 2000,
+        "within_target": true
+      },
+      "large": {
+        "evacuation_rate_mean": 0.9806666666666667,
+        "evacuation_rate_std": 0.0033333333333332993,
+        "evacuation_time_mean": 453.8,
+        "evacuation_time_std": 146.2,
+        "danger_count_mean": 0.0,
+        "total_people": 3000,
+        "within_target": true
+      }
+    },
+    "summary": {
+      "overall_evacuation_rate": 0.9593055555555555,
+      "rate_degradation": -0.04866666666666675,
+      "time_increase": 64.69999999999999,
+      "all_within_target": true
+    }
+  },
+  "full_system": {
+    "density_model": "/root/github/crowd-evacuation/outputs/models/density_predictor.pt",
+    "ppo_model": "/root/github/crowd-evacuation/outputs/models/ppo_large_station_small.zip",
+    "flow_levels": {
+      "small": {
+        "baseline": {
+          "evacuation_rate": 0.934,
+          "evacuation_time": 600.0
+        },
+        "full": {
+          "evacuation_rate": 0.932,
+          "evacuation_time": 547.2
+        },
+        "improvement": {
+          "rate_improvement": -0.0020000000000000018,
+          "time_reduction": 52.799999999999955
+        }
+      },
+      "medium": {
+        "baseline": {
+          "evacuation_rate": 0.965,
+          "evacuation_time": 600.0
+        },
+        "full": {
+          "evacuation_rate": 0.97,
+          "evacuation_time": 218.3
+        },
+        "improvement": {
+          "rate_improvement": 0.0050000000000000044,
+          "time_reduction": 381.7
+        }
+      },
+      "large": {
+        "baseline": {
+          "evacuation_rate": 0.975,
+          "evacuation_time": 600.0
+        },
+        "full": {
+          "evacuation_rate": 0.9753333333333334,
+          "evacuation_time": 600.0
+        },
+        "improvement": {
+          "rate_improvement": 0.00033333333333340764,
+          "time_reduction": 0.0
+        }
+      }
+    },
+    "summary": {
+      "avg_rate_improvement": 0.0011111111111111367,
+      "avg_time_reduction": 144.83333333333331,
+      "consistent_improvement": false
+    }
+  },
+  "conclusions": [
+    "密度预测模型需要更多训练数据",
+    "PPO模型跨规模泛化性优秀",
+    "完整系统优于baseline"
+  ]
+}
