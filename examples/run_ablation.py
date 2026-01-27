@@ -187,23 +187,21 @@ def load_ablation_config(config_path: str = None) -> Dict[str, Any]:
     return config
 
 
-def create_environment(
+def build_env_kwargs(
     exp_config: Dict[str, Any],
     group: str,
-    global_config: Dict[str, Any],
-    seed: int = 42
-) -> gym.Env:
+    global_config: Dict[str, Any]
+) -> Dict[str, Any]:
     """
-    根据实验配置创建环境
+    构建环境参数字典
 
     Args:
         exp_config: 实验配置
         group: 实验组 (A/B/C/D/E)
         global_config: 全局配置
-        seed: 随机种子
 
     Returns:
-        配置好的gym环境
+        环境参数字典
     """
     env_config = global_config.get("environment", {})
 
@@ -212,6 +210,9 @@ def create_environment(
         "n_pedestrians": env_config.get("num_pedestrians", 80),
         "max_steps": env_config.get("max_steps", 800),
         "dt": env_config.get("dt", 0.1),
+        # 启用GPU加速SFM (消融实验加速)
+        "use_optimized_gpu_sfm": global_config.get("training", {}).get("use_gpu_sfm", True),
+        "sfm_device": global_config.get("training", {}).get("sfm_device", "auto"),
     }
 
     # 根据实验组配置参数
@@ -246,13 +247,46 @@ def create_environment(
                 PedestrianType.IMPATIENT: 0.0,
             }
 
+        # SFM参数 (D3/D4实验关键参数)
+        sfm_config = exp_config.get("sfm_params", {})
+        env_kwargs["sfm_A"] = sfm_config.get("A", 2000.0)
+        env_kwargs["sfm_B"] = sfm_config.get("B", 0.08)
+        env_kwargs["sfm_tau"] = sfm_config.get("tau", 0.5)
+
+        # GBM修正配置
         gbm_config = exp_config.get("gbm_correction", {})
         env_kwargs["enable_enhanced_behaviors"] = gbm_config.get("enabled", True)
+        # 禁用GBM时权重设为0
+        env_kwargs["gbm_weight"] = gbm_config.get("weight", 0.3) if gbm_config.get("enabled", True) else 0.0
 
     elif group == "E":
         # E组: 引导策略消融
-        # 环境配置相同，区别在于是否加载PPO模型
-        pass
+        # 关键：通过enable_guidance控制是否启用引导逻辑
+        guidance_config = exp_config.get("guidance", {})
+        env_kwargs["enable_guidance"] = guidance_config.get("enabled", True)
+
+    return env_kwargs
+
+
+def create_environment(
+    exp_config: Dict[str, Any],
+    group: str,
+    global_config: Dict[str, Any],
+    seed: int = 42
+) -> gym.Env:
+    """
+    根据实验配置创建环境
+
+    Args:
+        exp_config: 实验配置
+        group: 实验组 (A/B/C/D/E)
+        global_config: 全局配置
+        seed: 随机种子
+
+    Returns:
+        配置好的gym环境
+    """
+    env_kwargs = build_env_kwargs(exp_config, group, global_config)
 
     # 创建基础环境
     env = MetroEvacuationEnv(**env_kwargs)
@@ -266,24 +300,37 @@ def create_environment(
     return env
 
 
+def make_env(env_kwargs: Dict[str, Any], seed: int):
+    """创建环境工厂函数 (用于SubprocVecEnv)"""
+    def _init():
+        env = MetroEvacuationEnv(**env_kwargs)
+        env.reset(seed=seed)
+        return env
+    return _init
+
+
 def train_ppo_model(
     env: gym.Env,
     exp_id: str,
     logger: ExperimentLogger,
     global_config: Dict[str, Any],
     output_dir: Path,
-    device: str = "auto"
+    device: str = "auto",
+    env_kwargs: Optional[Dict[str, Any]] = None,
+    seed: int = 42
 ) -> PPO:
     """
     训练PPO模型
 
     Args:
-        env: 训练环境
+        env: 训练环境 (单环境，用于DummyVecEnv回退)
         exp_id: 实验ID
         logger: 实验日志记录器
         global_config: 全局配置
         output_dir: 输出目录
         device: 训练设备
+        env_kwargs: 环境参数 (用于SubprocVecEnv创建多个环境)
+        seed: 随机种子
 
     Returns:
         训练好的PPO模型
@@ -292,9 +339,20 @@ def train_ppo_model(
         raise ImportError("stable-baselines3不可用")
 
     train_config = global_config.get("training", {})
+    n_envs = train_config.get("n_envs", 4)
 
-    # 创建向量环境
-    vec_env = DummyVecEnv([lambda: env])
+    # 创建向量环境 (优先使用SubprocVecEnv并行加速)
+    if env_kwargs is not None and n_envs > 1:
+        try:
+            vec_env = SubprocVecEnv([
+                make_env(env_kwargs, seed + i) for i in range(n_envs)
+            ])
+            print(f"  使用SubprocVecEnv: {n_envs}个并行环境")
+        except Exception as e:
+            print(f"  SubprocVecEnv创建失败: {e}, 回退到DummyVecEnv")
+            vec_env = DummyVecEnv([lambda: env])
+    else:
+        vec_env = DummyVecEnv([lambda: env])
 
     # 自动检测GPU (支持CUDA和MPS)
     if torch.cuda.is_available():
@@ -496,6 +554,9 @@ def run_single_experiment(
         config=exp_config
     )
 
+    # 构建环境参数 (用于SubprocVecEnv并行创建)
+    env_kwargs = build_env_kwargs(exp_config, group, global_config)
+
     # 创建环境
     env = create_environment(exp_config, group, global_config, seed=seed)
 
@@ -514,7 +575,9 @@ def run_single_experiment(
             logger=logger,
             global_config=global_config,
             output_dir=logger.output_dir,
-            device=device
+            device=device,
+            env_kwargs=env_kwargs,
+            seed=seed
         )
 
     # 评估模型
@@ -565,7 +628,13 @@ def run_ablation_group(
         return []
 
     group_config = config[group_key]
-    global_config = config.get("global", {})
+    global_config = config.get("global", {}).copy()
+
+    # 合并组级别的训练配置 (支持E组专用30k步数)
+    if "training" in group_config:
+        group_training = group_config["training"]
+        global_config["training"] = {**global_config.get("training", {}), **group_training}
+
     eval_config = global_config.get("evaluation", {})
     random_seeds = eval_config.get("random_seeds", [42])
 

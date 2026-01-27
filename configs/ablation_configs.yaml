@@ -14,8 +14,8 @@
 global:
   # 训练配置
   training:
-    total_timesteps: 100000      # 每组实验训练步数
-    n_envs: 4                    # 并行环境数
+    total_timesteps: 50000       # 每组实验训练步数 (从100k减半加速)
+    n_envs: 4                    # 并行环境数 (SubprocVecEnv)
     learning_rate: 0.0003
     n_steps: 1024
     batch_size: 128
@@ -26,6 +26,9 @@ global:
     ent_coef: 0.01
     ppo_device: "cpu"            # PPO+MLP策略在CPU上更快
     trajectory_device: "auto"    # 轨迹预测神经网络可用GPU (mps/cuda/cpu)
+    # GPU加速SFM (4070ti Super等NVIDIA GPU)
+    use_gpu_sfm: true            # 启用GPU加速SFM
+    sfm_device: "auto"           # 自动检测 (cuda/mps/cpu)
 
   # 评估配置
   evaluation:
@@ -285,6 +288,9 @@ group_D:
 # ============================================================
 group_E:
   description: "Guidance Strategy Ablation"
+  # E组专用训练配置 (PPO不是核心方案，只需证明对比效果)
+  training:
+    total_timesteps: 30000       # 30k步足够收敛对比
   experiments:
     E1_ppo_guidance:
       name: "PPO-based Guidance"
@@ -297,7 +303,7 @@ group_E:
     E2_no_guidance:
       name: "No Guidance (Free Choice)"
       guidance:
-        enabled: false
+        enabled: false           # 关键：禁用引导逻辑
         policy_type: "none"
         model_path: null
       baseline: false

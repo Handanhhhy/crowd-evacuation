@@ -157,6 +157,13 @@ class MetroEvacuationEnv(gym.Env):
         use_gpu_sfm: bool = False,
         use_optimized_gpu_sfm: bool = False,
         sfm_device: str = "auto",
+        # SFM参数 (消融实验D组用)
+        sfm_A: float = 2000.0,      # 社会力强度
+        sfm_B: float = 0.08,        # 社会力范围
+        sfm_tau: float = 0.5,       # 松弛时间
+        gbm_weight: float = 0.3,    # GBM修正权重
+        # 引导控制参数 (消融实验E组用)
+        enable_guidance: bool = True,  # 是否启用引导逻辑
     ):
         """
         Args:
@@ -217,6 +224,15 @@ class MetroEvacuationEnv(gym.Env):
             print("警告: 请求使用GPU SFM但不可用，将使用CPU版本")
         if use_optimized_gpu_sfm and not GPU_SFM_OPTIMIZED_AVAILABLE:
             print("警告: 请求使用优化版GPU SFM但不可用，将使用标准GPU版本")
+
+        # SFM参数 (消融实验D组用)
+        self.sfm_A = sfm_A
+        self.sfm_B = sfm_B
+        self.sfm_tau = sfm_tau
+        self.gbm_weight = gbm_weight
+
+        # 引导控制参数 (消融实验E组用)
+        self.enable_guidance = enable_guidance
 
         self.reward_weights = {**REWARD_DEFAULTS, **(reward_weights or {})}
 
@@ -352,11 +368,11 @@ class MetroEvacuationEnv(gym.Env):
         如果启用增强行为，将开启等待、犹豫、恐慌等特性
         支持CPU、GPU(MPS/CUDA)和优化版GPU三种模式
         """
-        # 基础SFM参数
+        # 基础SFM参数 (使用实例变量，支持消融实验D组参数调整)
         sfm_params = dict(
-            tau=0.5,
-            A=2000.0,
-            B=0.08,
+            tau=self.sfm_tau,
+            A=self.sfm_A,
+            B=self.sfm_B,
             wall_A=5000.0,
             wall_B=0.1,
             enable_waiting=self.enable_enhanced_behaviors,
@@ -366,15 +382,15 @@ class MetroEvacuationEnv(gym.Env):
             perturbation_sigma=0.05,
             panic_density_threshold=1.5,
             gbm_predictor=self.gbm_predictor,
-            gbm_weight=0.3,
+            gbm_weight=self.gbm_weight,
         )
 
         # 优化版GPU参数 (不支持增强行为，但速度快1000x+)
         optimized_params = dict(
             device=self.sfm_device,
-            tau=0.5,
-            A=2000.0,
-            B=0.08,
+            tau=self.sfm_tau,
+            A=self.sfm_A,
+            B=self.sfm_B,
             wall_A=5000.0,
             wall_B=0.1,
             enable_perturbation=self.enable_enhanced_behaviors,
@@ -1273,7 +1289,8 @@ class MetroEvacuationEnv(gym.Env):
         guided_count = 0
         corner_avoided = 0
 
-        if self.current_step % 5 == 0 and len(self.sfm.pedestrians) > 5:
+        # 只有启用引导时才执行引导逻辑 (消融实验E组控制)
+        if self.enable_guidance and self.current_step % 5 == 0 and len(self.sfm.pedestrians) > 5:
             # 使用分层预测式引导系统
             if self.trajectory_predictor is not None:
                 guided_count = self.predictive_guidance_system()
