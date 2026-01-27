@@ -1348,7 +1348,8 @@ class MetroEvacuationEnv(gym.Env):
         corner_avoided = 0
 
         # 只有启用引导时才执行引导逻辑 (消融实验E组控制)
-        if self.enable_guidance and self.current_step % 5 == 0 and self._get_remaining_count() > 5:
+        # 注意：GPU-SFM模式下跳过复杂引导系统（CPU快照无法同步回GPU）
+        if self.enable_guidance and not self.use_optimized_gpu_sfm and self.current_step % 5 == 0 and self._get_remaining_count() > 5:
             # 使用分层预测式引导系统
             if self.trajectory_predictor is not None:
                 guided_count = self.predictive_guidance_system()

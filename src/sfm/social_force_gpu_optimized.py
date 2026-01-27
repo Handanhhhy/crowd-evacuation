@@ -16,7 +16,7 @@ GPU加速社会力模型 - 优化版本
 import torch
 import numpy as np
 from typing import List, Tuple, Optional, Dict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -57,6 +57,8 @@ class PedestrianData:
     panic_factor: float = 0.0
     is_waiting: bool = False
     guidance_count: int = 0
+    last_guidance_time: float = -999.0  # 引导系统需要
+    original_target: Optional[np.ndarray] = field(default=None)  # 引导系统需要
 
     @property
     def speed(self) -> float:
@@ -180,6 +182,11 @@ class GPUSocialForceModelOptimized:
         self.panic_factors = torch.zeros(n, device=self.device, dtype=torch.float32)
         self.is_waiting = torch.zeros(n, device=self.device, dtype=torch.bool)
         self.is_active = torch.ones(n, device=self.device, dtype=torch.bool)
+
+        # 引导系统状态
+        self.guidance_counts = torch.zeros(n, device=self.device, dtype=torch.int32)
+        self.last_guidance_times = torch.full((n,), -999.0, device=self.device, dtype=torch.float32)
+        self.original_targets = torch.tensor(targets, device=self.device, dtype=torch.float32)
 
         self._cpu_synced = False
 
@@ -411,6 +418,18 @@ class GPUSocialForceModelOptimized:
         panic_factors = self.panic_factors.cpu().numpy()
         is_active = self.is_active.cpu().numpy()
 
+        # 获取引导状态（如果存在）
+        guidance_counts = getattr(self, 'guidance_counts', None)
+        last_guidance_times = getattr(self, 'last_guidance_times', None)
+        original_targets = getattr(self, 'original_targets', None)
+
+        if guidance_counts is not None:
+            guidance_counts = guidance_counts.cpu().numpy()
+        if last_guidance_times is not None:
+            last_guidance_times = last_guidance_times.cpu().numpy()
+        if original_targets is not None:
+            original_targets = original_targets.cpu().numpy()
+
         self.pedestrians = []
         for i in range(self.n_pedestrians):
             if is_active[i]:
@@ -424,6 +443,9 @@ class GPUSocialForceModelOptimized:
                     ped_type=PedestrianType.NORMAL,
                     reaction_time=float(reaction_times[i]),
                     panic_factor=float(panic_factors[i]),
+                    guidance_count=int(guidance_counts[i]) if guidance_counts is not None else 0,
+                    last_guidance_time=float(last_guidance_times[i]) if last_guidance_times is not None else -999.0,
+                    original_target=original_targets[i].copy() if original_targets is not None else targets[i].copy(),
                 )
                 self.pedestrians.append(ped)
 
