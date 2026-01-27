@@ -1,0 +1,45 @@
+{
+  "pipeline_start": "2026-01-25T23:35:08.338323",
+  "mode": "normal",
+  "skip_ablation": false,
+  "steps": [
+    {
+      "step_id": 3,
+      "name": "ppo_training",
+      "description": "训练PPO大站策略（小流量）",
+      "success": true,
+      "return_code": 0,
+      "duration_seconds": 8478.607771,
+      "start_time": "2026-01-25T23:35:08.338477",
+      "end_time": "2026-01-26T01:56:26.946248",
+      "output_file": "outputs/models/ppo_large_station_small.zip",
+      "output_exists": true
+    },
+    {
+      "step_id": 4,
+      "name": "generalization_test",
+      "description": "完整泛化验证（密度预测+PPO+完整系统）",
+      "success": true,
+      "return_code": 0,
+      "duration_seconds": 7227.998745,
+      "start_time": "2026-01-26T01:56:26.946518",
+      "end_time": "2026-01-26T03:56:54.945263",
+      "output_file": "outputs/generalization/generalization_report.json",
+      "output_exists": true
+    },
+    {
+      "step_id": 5,
+      "name": "ablation",
+      "description": "运行消融实验（17组对比，可选）",
+      "success": false,
+      "return_code": -15,
+      "duration_seconds": 152183.311705,
+      "start_time": "2026-01-26T03:56:54.945476",
+      "end_time": "2026-01-27T22:13:18.257181",
+      "output_file": "outputs/ablation/summary_report.json",
+      "output_exists": false
+    }
+  ],
+  "pipeline_end": "2026-01-27T22:13:18.257711",
+  "total_duration_seconds": 167889.918221
+}

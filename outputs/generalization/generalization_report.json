@@ -1,54 +1,54 @@
 {
-  "timestamp": "2026-01-25T15:17:41.699474",
+  "timestamp": "2026-01-26T03:56:54.480786",
   "density_predictor": {
     "model_path": "/root/github/crowd-evacuation/outputs/models/density_predictor.pt",
     "flow_levels": {
       "small": {
-        "mae_mean": 0.05002699424388797,
-        "mae_std": 0.0,
-        "rmse_mean": 0.07420546688814429,
-        "rmse_std": 0.0,
-        "correlation_mean": 0.2446173179469057,
-        "n_samples": 1
+        "mae_mean": 0.0330102880407234,
+        "mae_std": 0.00021602145685912093,
+        "rmse_mean": 0.046926052535134655,
+        "rmse_std": 0.00018620995927329795,
+        "correlation_mean": 0.05818840859427593,
+        "n_samples": 3
       },
       "medium": {
-        "mae_mean": 0.0519881914277917,
-        "mae_std": 0.0,
-        "rmse_mean": 0.07736640362832589,
-        "rmse_std": 0.0,
-        "correlation_mean": 0.24556738371611847,
-        "n_samples": 1
+        "mae_mean": 0.03640367013161178,
+        "mae_std": 0.0007112171382970405,
+        "rmse_mean": 0.053403188981826465,
+        "rmse_std": 0.0007823162214296865,
+        "correlation_mean": 0.09880008137727654,
+        "n_samples": 3
       },
       "large": {
-        "mae_mean": 0.06020606402089647,
-        "mae_std": 0.0,
-        "rmse_mean": 0.09235824757888894,
-        "rmse_std": 0.0,
-        "correlation_mean": 0.3365235985475135,
-        "n_samples": 1
+        "mae_mean": 0.03806417599170243,
+        "mae_std": 0.0006368683000998833,
+        "rmse_mean": 0.055143015489514745,
+        "rmse_std": 0.000701249135740005,
+        "correlation_mean": 0.11922413499835012,
+        "n_samples": 3
       }
     },
     "summary": {
-      "overall_mae": 0.05407374989752537,
-      "overall_correlation": 0.2755694334035126,
-      "generalization_gap": 0.004409499667710641
+      "overall_mae": 0.03582604472134587,
+      "overall_correlation": 0.09207087498996752,
+      "generalization_gap": 0.0021032806424252865
     }
   },
   "ppo_model": {
     "model_path": "/root/github/crowd-evacuation/outputs/models/ppo_large_station_small.zip",
     "flow_levels": {
       "small": {
-        "evacuation_rate_mean": 0.9319999999999999,
-        "evacuation_rate_std": 0.006999999999999951,
-        "evacuation_time_mean": 389.1,
-        "evacuation_time_std": 210.9,
+        "evacuation_rate_mean": 0.9366666666666666,
+        "evacuation_rate_std": 0.00464279609239466,
+        "evacuation_time_mean": 369.6666666666667,
+        "evacuation_time_std": 163.8311597007385,
         "danger_count_mean": 0.0,
         "total_people": 1000,
         "within_target": true
       },
       "medium": {
-        "evacuation_rate_mean": 0.9652499999999999,
-        "evacuation_rate_std": 0.0042500000000000315,
+        "evacuation_rate_mean": 0.9676666666666667,
+        "evacuation_rate_std": 0.0034721111093332564,
         "evacuation_time_mean": 600.0,
         "evacuation_time_std": 0.0,
         "danger_count_mean": 0.0,
@@ -56,19 +56,19 @@
         "within_target": true
       },
       "large": {
-        "evacuation_rate_mean": 0.9806666666666667,
-        "evacuation_rate_std": 0.0033333333333332993,
-        "evacuation_time_mean": 453.8,
-        "evacuation_time_std": 146.2,
+        "evacuation_rate_mean": 0.9819999999999999,
+        "evacuation_rate_std": 0.0010886621079036053,
+        "evacuation_time_mean": 537.3000000000001,
+        "evacuation_time_std": 88.67119036079305,
         "danger_count_mean": 0.0,
         "total_people": 3000,
         "within_target": true
       }
     },
     "summary": {
-      "overall_evacuation_rate": 0.9593055555555555,
-      "rate_degradation": -0.04866666666666675,
-      "time_increase": 64.69999999999999,
+      "overall_evacuation_rate": 0.962111111111111,
+      "rate_degradation": -0.045333333333333226,
+      "time_increase": 167.63333333333338,
       "all_within_target": true
     }
   },
@@ -78,51 +78,51 @@
     "flow_levels": {
       "small": {
         "baseline": {
-          "evacuation_rate": 0.934,
+          "evacuation_rate": 0.9276666666666668,
           "evacuation_time": 600.0
         },
         "full": {
-          "evacuation_rate": 0.932,
-          "evacuation_time": 547.2
+          "evacuation_rate": 0.9416666666666665,
+          "evacuation_time": 210.46666666666667
         },
         "improvement": {
-          "rate_improvement": -0.0020000000000000018,
-          "time_reduction": 52.799999999999955
+          "rate_improvement": 0.01399999999999979,
+          "time_reduction": 389.5333333333333
         }
       },
       "medium": {
         "baseline": {
-          "evacuation_rate": 0.965,
+          "evacuation_rate": 0.9633333333333334,
           "evacuation_time": 600.0
         },
         "full": {
-          "evacuation_rate": 0.97,
-          "evacuation_time": 218.3
+          "evacuation_rate": 0.9661666666666666,
+          "evacuation_time": 491.8666666666666
         },
         "improvement": {
-          "rate_improvement": 0.0050000000000000044,
-          "time_reduction": 381.7
+          "rate_improvement": 0.0028333333333332433,
+          "time_reduction": 108.13333333333338
         }
       },
       "large": {
         "baseline": {
-          "evacuation_rate": 0.975,
+          "evacuation_rate": 0.9737777777777779,
           "evacuation_time": 600.0
         },
         "full": {
-          "evacuation_rate": 0.9753333333333334,
-          "evacuation_time": 600.0
+          "evacuation_rate": 0.9804444444444443,
+          "evacuation_time": 482.26666666666665
         },
         "improvement": {
-          "rate_improvement": 0.00033333333333340764,
-          "time_reduction": 0.0
+          "rate_improvement": 0.0066666666666664876,
+          "time_reduction": 117.73333333333335
         }
       }
     },
     "summary": {
-      "avg_rate_improvement": 0.0011111111111111367,
-      "avg_time_reduction": 144.83333333333331,
-      "consistent_improvement": false
+      "avg_rate_improvement": 0.007833333333333173,
+      "avg_time_reduction": 205.13333333333335,
+      "consistent_improvement": true
     }
   },
   "conclusions": [
