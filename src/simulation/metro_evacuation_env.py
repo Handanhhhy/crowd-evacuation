@@ -301,6 +301,24 @@ class MetroEvacuationEnv(gym.Env):
             'rewards': []
         }
 
+        # GPU-SFM辅助变量
+        self._ped_types = []  # 保存行人类型（GPU-SFM用）
+
+    def _get_pedestrians(self) -> List:
+        """获取行人列表（兼容CPU和GPU SFM）
+
+        GPU-SFM需要先同步数据到CPU
+        """
+        if self.use_optimized_gpu_sfm:
+            self.sfm.sync_to_cpu_pedestrians()
+        return self.sfm.pedestrians
+
+    def _get_remaining_count(self) -> int:
+        """获取剩余行人数量（兼容CPU和GPU SFM）"""
+        if self.use_optimized_gpu_sfm:
+            return self.sfm.get_active_count()
+        return len(self.sfm.pedestrians)
+
     def _load_gbm_predictor(self, model_path: str) -> bool:
         """加载GBM行为预测模型
 
@@ -453,6 +471,7 @@ class MetroEvacuationEnv(gym.Env):
         使用增强版本：
         - 根据配置的类型分布创建不同类型的行人
         - 老人、儿童、急躁型等具有不同的速度和行为特征
+        - 支持GPU优化版SFM的批量初始化
 
         文献参数:
         - NORMAL: 1.34 m/s (Helbing 1995)
@@ -468,6 +487,15 @@ class MetroEvacuationEnv(gym.Env):
         # 归一化概率
         total = sum(probs)
         probs = [p / total for p in probs]
+
+        # 收集所有行人数据 (用于批量初始化)
+        positions_list = []
+        velocities_list = []
+        targets_list = []
+        desired_speeds_list = []
+        radii_list = []
+        reaction_times_list = []
+        ped_types_list = []
 
         for i in range(self.n_pedestrians):
             # 在站台区域随机生成
@@ -492,16 +520,46 @@ class MetroEvacuationEnv(gym.Env):
             # 随机选择行人类型
             ped_type = np.random.choice(types, p=probs)
 
-            # 使用工厂方法创建带类型的行人
-            ped = Pedestrian.create_with_type(
-                id=i,
-                position=position,
-                velocity=velocity,
-                target=initial_target,
-                ped_type=ped_type,
-                speed_variation=True
+            # 获取类型参数
+            params = PEDESTRIAN_TYPE_PARAMS[ped_type]
+            desired_speed = np.random.normal(params['desired_speed'], params['speed_std'])
+            desired_speed = np.clip(desired_speed, 0.3, 2.0)
+
+            positions_list.append(position)
+            velocities_list.append(velocity)
+            targets_list.append(initial_target)
+            desired_speeds_list.append(desired_speed)
+            radii_list.append(params['radius'])
+            reaction_times_list.append(params['reaction_time'])
+            ped_types_list.append(ped_type)
+
+        # 根据SFM类型选择初始化方式
+        if self.use_optimized_gpu_sfm:
+            # GPU优化版：批量初始化
+            self.sfm.initialize_pedestrians(
+                positions=np.array(positions_list),
+                velocities=np.array(velocities_list),
+                targets=np.array(targets_list),
+                desired_speeds=np.array(desired_speeds_list),
+                radii=np.array(radii_list),
+                reaction_times=np.array(reaction_times_list),
             )
-            self.sfm.add_pedestrian(ped)
+            # 保存类型信息供后续使用
+            self._ped_types = ped_types_list
+        else:
+            # CPU版：逐个添加
+            for i in range(self.n_pedestrians):
+                ped = Pedestrian.create_with_type(
+                    id=i,
+                    position=positions_list[i],
+                    velocity=velocities_list[i],
+                    target=targets_list[i],
+                    ped_type=ped_types_list[i],
+                    speed_variation=False  # 已经在上面处理了速度变化
+                )
+                # 覆盖速度（使用预先计算的值）
+                ped.desired_speed = desired_speeds_list[i]
+                self.sfm.add_pedestrian(ped)
 
     def reset(
         self,
@@ -552,7 +610,7 @@ class MetroEvacuationEnv(gym.Env):
         exit_congestions = []
         exit_flow_ratios = []
 
-        total_peds = len(self.sfm.pedestrians)
+        total_peds = self._get_remaining_count()
 
         for exit_obj in self.exits:
             density, congestion = self._compute_exit_metrics(exit_obj)
@@ -561,7 +619,7 @@ class MetroEvacuationEnv(gym.Env):
 
             # 计算走向该出口的行人比例
             flow_count = 0
-            for ped in self.sfm.pedestrians:
+            for ped in self._get_pedestrians():
                 if np.linalg.norm(ped.target - exit_obj.position) < 2.0:
                     flow_count += 1
             flow_ratio = flow_count / max(total_peds, 1)
@@ -609,7 +667,7 @@ class MetroEvacuationEnv(gym.Env):
         gate_count = 0
         pillar_count = 0
 
-        for ped in self.sfm.pedestrians:
+        for ped in self._get_pedestrians():
             x, y = ped.position
 
             # 检查是否在闸机区
@@ -642,7 +700,7 @@ class MetroEvacuationEnv(gym.Env):
         exit_pos = exit_obj.position
 
         nearby_peds = []
-        for ped in self.sfm.pedestrians:
+        for ped in self._get_pedestrians():
             dist = np.linalg.norm(ped.position - exit_pos)
             if dist < radius:
                 nearby_peds.append(ped)
@@ -691,7 +749,7 @@ class MetroEvacuationEnv(gym.Env):
             return future_positions
 
         # 回退到线性外推
-        for ped in self.sfm.pedestrians:
+        for ped in self._get_pedestrians():
             speed = np.linalg.norm(ped.velocity)
 
             if speed > 0.1:
@@ -724,12 +782,12 @@ class MetroEvacuationEnv(gym.Env):
             return {}
 
         # 更新历史缓冲区
-        for ped in self.sfm.pedestrians:
+        for ped in self._get_pedestrians():
             self.trajectory_predictor.update_history(ped.id, ped.position)
 
         # 批量预测
         predictions = self.trajectory_predictor.predict_all_trajectories(
-            self.sfm.pedestrians,
+            self._get_pedestrians(),
             scene_bounds=(0, 0, self.scene_width, self.scene_height)
         )
 
@@ -776,7 +834,7 @@ class MetroEvacuationEnv(gym.Env):
         predictions = self.predict_future_positions_neural()
         redirected_count = 0
 
-        for ped in self.sfm.pedestrians:
+        for ped in self._get_pedestrians():
             if ped.id not in predictions:
                 continue
 
@@ -825,7 +883,7 @@ class MetroEvacuationEnv(gym.Env):
         exit_counts = {exit_obj.name: 0 for exit_obj in self.exits}
 
         # 建立行人ID到行人对象的映射
-        ped_map = {ped.id: ped for ped in self.sfm.pedestrians}
+        ped_map = {ped.id: ped for ped in self._get_pedestrians()}
 
         for ped_id, future_pos in future_positions.items():
             ped = ped_map.get(ped_id)
@@ -923,7 +981,7 @@ class MetroEvacuationEnv(gym.Env):
             return 0
 
         redirect_count = 0
-        ped_map = {ped.id: ped for ped in self.sfm.pedestrians}
+        ped_map = {ped.id: ped for ped in self._get_pedestrians()}
 
         # 4. 对每个过载出口，重分配部分行人
         for overloaded_exit in overloaded_exits:
@@ -931,7 +989,7 @@ class MetroEvacuationEnv(gym.Env):
 
             # 找出目标是该出口的行人
             candidates = []
-            for ped in self.sfm.pedestrians:
+            for ped in self._get_pedestrians():
                 # 检查行人的目标是否是过载出口
                 dist_to_overloaded = np.linalg.norm(ped.target - overloaded_exit.position)
                 if dist_to_overloaded < 1.0:  # 目标是该出口
@@ -1038,14 +1096,14 @@ class MetroEvacuationEnv(gym.Env):
         # 第一步：统计每个出口的目标人数
         exit_target_count = {exit_obj.id: 0 for exit_obj in self.exits}
 
-        for ped in self.sfm.pedestrians:
+        for ped in self._get_pedestrians():
             for exit_obj in self.exits:
                 if np.linalg.norm(ped.target - exit_obj.position) < 2.0:
                     exit_target_count[exit_obj.id] += 1
                     break
 
         # 计算总人数
-        total_peds = len(self.sfm.pedestrians)
+        total_peds = self._get_remaining_count()
         if total_peds < cfg['min_peds_for_rebalance']:
             return problem_peds
 
@@ -1062,7 +1120,7 @@ class MetroEvacuationEnv(gym.Env):
                 overloaded_exit_ids.add(exit_obj.id)
 
         # 第三步：识别问题行人（只从过载出口选择）
-        for ped in self.sfm.pedestrians:
+        for ped in self._get_pedestrians():
             if ped.id not in predictions:
                 continue
 
@@ -1199,9 +1257,9 @@ class MetroEvacuationEnv(gym.Env):
             return None
 
         # 统计各出口目标人数，确定过载出口
-        total_peds = len(self.sfm.pedestrians)
+        total_peds = self._get_remaining_count()
         exit_target_count = {exit_obj.id: 0 for exit_obj in self.exits}
-        for p in self.sfm.pedestrians:
+        for p in self._get_pedestrians():
             for exit_obj in self.exits:
                 if np.linalg.norm(p.target - exit_obj.position) < 2.0:
                     exit_target_count[exit_obj.id] += 1
@@ -1290,7 +1348,7 @@ class MetroEvacuationEnv(gym.Env):
         corner_avoided = 0
 
         # 只有启用引导时才执行引导逻辑 (消融实验E组控制)
-        if self.enable_guidance and self.current_step % 5 == 0 and len(self.sfm.pedestrians) > 5:
+        if self.enable_guidance and self.current_step % 5 == 0 and self._get_remaining_count() > 5:
             # 使用分层预测式引导系统
             if self.trajectory_predictor is not None:
                 guided_count = self.predictive_guidance_system()
@@ -1324,7 +1382,7 @@ class MetroEvacuationEnv(gym.Env):
         self.history['rewards'].append(reward)
 
         # 检查终止条件
-        terminated = len(self.sfm.pedestrians) == 0
+        terminated = self._get_remaining_count() == 0
         truncated = self.current_step >= self.max_steps
 
         # 大规模安全检测
@@ -1333,7 +1391,7 @@ class MetroEvacuationEnv(gym.Env):
         obs = self._get_observation()
         info = {
             'evacuated': self.evacuated_count,
-            'remaining': len(self.sfm.pedestrians),
+            'remaining': self._get_remaining_count(),
             'step': self.current_step,
             'evacuated_by_exit': self.evacuated_by_exit.copy(),
             'evacuated_by_type': {t.value: c for t, c in self.evacuated_by_type.items()},
@@ -1353,7 +1411,7 @@ class MetroEvacuationEnv(gym.Env):
         """应用动作：引导行人到推荐出口"""
         target_exit = self.exits[action]
 
-        for ped in self.sfm.pedestrians:
+        for ped in self._get_pedestrians():
             # 只有在大厅区域的行人才响应引导（已过闸机）
             if ped.position[0] > 22:
                 # 计算到当前目标和推荐目标的距离
@@ -1378,7 +1436,17 @@ class MetroEvacuationEnv(gym.Env):
         """检查并移除已疏散的行人
 
         增强版本: 同时统计按类型的疏散数量，并清理轨迹预测历史
+        支持CPU和GPU两种SFM模式
         """
+        if self.use_optimized_gpu_sfm:
+            self._check_evacuated_gpu()
+        else:
+            self._check_evacuated_cpu()
+
+        self.history['evacuated'].append(self.evacuated_count)
+
+    def _check_evacuated_cpu(self):
+        """CPU版疏散检查"""
         evacuated = []
         for ped in self.sfm.pedestrians:
             for exit_obj in self.exits:
@@ -1397,7 +1465,40 @@ class MetroEvacuationEnv(gym.Env):
             if self.trajectory_predictor is not None:
                 self.trajectory_predictor.remove_pedestrian(ped.id)
 
-        self.history['evacuated'].append(self.evacuated_count)
+    def _check_evacuated_gpu(self):
+        """GPU版疏散检查（高效批量处理）"""
+        import torch
+
+        # 获取当前活跃的行人位置
+        positions = self.sfm.positions  # GPU tensor
+        is_active = self.sfm.is_active
+
+        # 检查每个出口
+        for exit_obj in self.exits:
+            exit_pos = torch.tensor(
+                exit_obj.position,
+                device=self.sfm.device,
+                dtype=torch.float32
+            )
+
+            # 计算到出口的距离
+            dist = torch.norm(positions - exit_pos, dim=1)
+
+            # 找到到达出口的活跃行人
+            evacuate_mask = (dist < exit_obj.width) & is_active
+
+            # 统计疏散数量
+            evacuated_count = evacuate_mask.sum().item()
+            if evacuated_count > 0:
+                self.evacuated_count += evacuated_count
+                self.evacuated_by_exit[exit_obj.name] += evacuated_count
+
+                # 按类型统计（GPU模式简化处理，统一计入NORMAL）
+                # 注：如需精确类型统计，需要维护GPU端的类型数组
+                self.evacuated_by_type[PedestrianType.NORMAL] += evacuated_count
+
+                # 标记为非活跃
+                self.sfm.is_active[evacuate_mask] = False
 
     def _compute_reward(self) -> float:
         """计算增强奖励 (归一化版本)
@@ -1439,7 +1540,7 @@ class MetroEvacuationEnv(gym.Env):
         reward -= w["time_penalty"]
 
         # 4. 完成奖励
-        if len(self.sfm.pedestrians) == 0:
+        if self._get_remaining_count() == 0:
             reward += w["completion_bonus"]
             # 额外奖励：快速完成
             time_bonus = max(0, (self.max_steps - self.current_step) / self.max_steps * 50)
@@ -1486,12 +1587,12 @@ class MetroEvacuationEnv(gym.Env):
         Returns:
             安全间距奖励 (0-1, 越大越好)
         """
-        if len(self.sfm.pedestrians) < 2:
+        if self._get_remaining_count() < 2:
             return 1.0
 
         # 计算平均最近邻距离
         min_distances = []
-        positions = [ped.position for ped in self.sfm.pedestrians]
+        positions = [ped.position for ped in self._get_pedestrians()]
 
         for i, pos_i in enumerate(positions):
             min_dist = float('inf')
@@ -1527,7 +1628,7 @@ class MetroEvacuationEnv(gym.Env):
         Returns:
             (最大局部密度, 危险区域行人数)
         """
-        if len(self.sfm.pedestrians) < 10:
+        if self._get_remaining_count() < 10:
             return 0.0, 0
 
         safety = LARGE_SCALE_SAFETY
@@ -1538,10 +1639,10 @@ class MetroEvacuationEnv(gym.Env):
         danger_count = 0
         detection_radius = 2.0  # 2米半径检测局部密度
 
-        for ped in self.sfm.pedestrians:
+        for ped in self._get_pedestrians():
             # 计算该行人周围的局部密度
             nearby_count = 0
-            for other in self.sfm.pedestrians:
+            for other in self._get_pedestrians():
                 if other.id != ped.id:
                     dist = np.linalg.norm(ped.position - other.position)
                     if dist < detection_radius:
@@ -1578,7 +1679,7 @@ class MetroEvacuationEnv(gym.Env):
         new_panic_count = 0
 
         # 找出当前恐慌的行人
-        panicked_peds = [ped for ped in self.sfm.pedestrians
+        panicked_peds = [ped for ped in self._get_pedestrians()
                         if hasattr(ped, 'panic_factor') and ped.panic_factor > 0.3]
 
         if not panicked_peds:
@@ -1586,7 +1687,7 @@ class MetroEvacuationEnv(gym.Env):
 
         # 传播恐慌
         for source in panicked_peds:
-            for target in self.sfm.pedestrians:
+            for target in self._get_pedestrians():
                 if target.id == source.id:
                     continue
 
@@ -1621,7 +1722,7 @@ class MetroEvacuationEnv(gym.Env):
                   f"疏散 {self.evacuated_count}/{self.n_pedestrians} "
                   f"(出口: {exit_stats}) "
                   f"(类型: {type_stats}), "
-                  f"剩余 {len(self.sfm.pedestrians)}")
+                  f"剩余 {self._get_remaining_count()}")
 
     def close(self):
         """关闭环境"""

@@ -210,7 +210,7 @@ def build_env_kwargs(
         "n_pedestrians": env_config.get("num_pedestrians", 80),
         "max_steps": env_config.get("max_steps", 800),
         "dt": env_config.get("dt", 0.1),
-        # 启用GPU加速SFM (消融实验加速)
+        # GPU加速SFM (4070ti Super等NVIDIA GPU)
         "use_optimized_gpu_sfm": global_config.get("training", {}).get("use_gpu_sfm", True),
         "sfm_device": global_config.get("training", {}).get("sfm_device", "auto"),
     }
