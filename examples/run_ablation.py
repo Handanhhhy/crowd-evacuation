@@ -754,13 +754,26 @@ def _run_group_worker(args: Tuple) -> List[ExperimentResult]:
     并行执行单个组的工作函数
 
     Args:
-        args: (group, config, output_dir, experiments, device, run_timestamp)
+        args: (group, config, output_dir, experiments, device, run_timestamp, worker_id, n_gpus)
 
     Returns:
         实验结果列表
     """
-    group, config, output_dir, experiments, device, run_timestamp = args
-    print(f"\n[组{group}] 开始... (进程 {os.getpid()})")
+    group, config, output_dir, experiments, device, run_timestamp, worker_id, n_gpus = args
+
+    # GPU资源隔离：为每个worker分配不同的GPU（如果有多GPU）
+    # 或者在并行时强制使用CPU避免冲突
+    if n_gpus > 1 and torch.cuda.is_available():
+        # 多GPU环境：每个worker使用不同的GPU
+        gpu_id = worker_id % n_gpus
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        print(f"\n[组{group}] 开始... (进程 {os.getpid()}, GPU {gpu_id})")
+    elif n_gpus == 1 and device != "cpu":
+        # 单GPU并行：强制使用CPU避免冲突
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        print(f"\n[组{group}] 开始... (进程 {os.getpid()}, 强制CPU - 避免GPU冲突)")
+    else:
+        print(f"\n[组{group}] 开始... (进程 {os.getpid()})")
 
     results = run_ablation_group(
         group=group,
@@ -826,12 +839,16 @@ def run_all_ablations(
         n_parallel = min(multiprocessing.cpu_count(), len(groups))
     n_parallel = min(n_parallel, len(groups))  # 不超过组数
 
+    # 检测GPU数量
+    n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+
     print(f"\n{'#'*60}")
     print(f"消融实验开始")
     print(f"配置: {config_path or 'configs/ablation_configs.yaml'}")
     print(f"输出目录: {output_dir / run_timestamp}")
     print(f"实验组: {groups}")
     print(f"并行度: {n_parallel} {'(并行)' if n_parallel > 1 else '(顺序)'}")
+    print(f"GPU数量: {n_gpus} {'(并行时将使用CPU避免冲突)' if n_gpus == 1 and n_parallel > 1 else ''}")
     print(f"运行时间戳: {run_timestamp}")
     print(f"{'#'*60}")
 
@@ -839,10 +856,10 @@ def run_all_ablations(
     all_results = []
 
     if n_parallel > 1:
-        # 并行执行
+        # 并行执行 - 添加GPU资源管理
         worker_args = [
-            (group, config, str(output_dir), experiments, device, run_timestamp)
-            for group in groups
+            (group, config, str(output_dir), experiments, device, run_timestamp, i, n_gpus)
+            for i, group in enumerate(groups)
         ]
 
         with ProcessPoolExecutor(max_workers=n_parallel) as executor:
@@ -964,8 +981,14 @@ def main():
     parser.add_argument(
         "--parallel", "-p",
         type=int,
-        default=4,
-        help="并行运行的组数 (默认4, 设为1则顺序执行, 设为0则自动检测)"
+        default=1,
+        help="并行运行的组数 (默认1=顺序执行, 避免GPU冲突; 设为0=自动检测CPU核心数)"
+    )
+
+    parser.add_argument(
+        "--force-cpu",
+        action="store_true",
+        help="强制使用CPU运行 (避免GPU冲突，适合并行执行)"
     )
 
     args = parser.parse_args()
@@ -977,18 +1000,31 @@ def main():
     # 确定输出目录
     output_dir = args.output_dir or "outputs/ablation"
 
+    # 确定设备
+    device = args.device
+    if args.force_cpu:
+        device = "cpu"
+        print("[配置] 强制使用CPU运行")
+
+    # 并行+GPU警告
+    if args.parallel > 1 and device != "cpu":
+        n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        if n_gpus <= 1:
+            print(f"[警告] 并行度={args.parallel} 但只有{n_gpus}个GPU，将自动使用CPU避免冲突")
+            print("[提示] 使用 --force-cpu 或 --parallel 1 可避免此警告")
+
     if args.summary_only:
         # 只生成汇总 (自动查找最新的运行目录)
         generate_summary(output_dir)
     else:
-        # 运行实验 (默认并行)
+        # 运行实验
         results, run_timestamp = run_all_ablations(
             config_path=args.config,
             output_dir=output_dir,
             groups=args.groups,
             experiments=args.experiments,
             timesteps=args.timesteps,
-            device=args.device,
+            device=device,
             n_parallel=args.parallel
         )
 

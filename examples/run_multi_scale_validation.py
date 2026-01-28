@@ -456,7 +456,15 @@ def main():
                         help="快速模式 (减少训练步数)")
     parser.add_argument("--output", "-o", type=str, default=None,
                         help="输出目录")
+    parser.add_argument("--force-cpu", action="store_true",
+                        help="强制使用CPU运行 (避免GPU内存不足)")
     args = parser.parse_args()
+
+    # 强制CPU模式
+    if args.force_cpu:
+        import os
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        print("[配置] 强制使用CPU运行")
 
     # 加载配置
     config = load_config(args.config)
