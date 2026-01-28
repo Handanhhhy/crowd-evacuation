@@ -1,0 +1,7 @@
+experiment_id,experiment_name,group,evacuation_rate_mean,evacuation_rate_std,evacuation_time_mean,evacuation_time_std,max_congestion_mean,max_congestion_std,exit_balance_mean,exit_balance_std,cumulative_reward_mean,cumulative_reward_std,final_mean_reward
+C2_linear_seed123,Linear Extrapolation,C,0.9875,0.0000,600.00,0.00,1.0179,0.3095,9.4248,3.1299,1137.77,53.61,0.00
+C2_linear_seed42,Linear Extrapolation,C,0.9900,0.0050,516.20,167.60,0.9553,0.1331,10.3621,3.3934,1157.49,134.96,0.00
+D3_weak_social_force_seed123,Reduced Social Force (A=1000),D,0.9900,0.0050,530.20,139.60,0.8999,0.2404,9.1979,3.2692,1196.55,100.85,0.00
+D3_weak_social_force_seed42,Reduced Social Force (A=1000),D,0.9900,0.0050,508.60,182.80,1.0014,0.2621,9.6569,3.6195,1179.80,160.34,0.00
+D4_no_gbm_seed123,No GBM Correction,D,0.9875,0.0000,600.00,0.00,0.9046,0.2133,8.5313,2.8471,1126.73,52.72,0.00
+D4_no_gbm_seed42,No GBM Correction,D,0.9925,0.0061,466.20,170.51,0.8178,0.2022,8.5718,3.2166,1228.87,152.57,0.00

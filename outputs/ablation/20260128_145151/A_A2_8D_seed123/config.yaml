@@ -1,0 +1,15 @@
+baseline: false
+experiment_id: A2_8D_seed123
+experiment_name: Reduced Observation (8D)
+group: A
+name: Reduced Observation (8D)
+observation_dim: 8
+observation_features:
+  bottleneck_density: false
+  evacuation_rate: false
+  exit_congestion: true
+  exit_density: true
+  flow_direction: false
+  remaining_ratio: true
+  time_ratio: true
+timestamp: '20260128_145151'

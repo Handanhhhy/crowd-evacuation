@@ -1,0 +1,7 @@
+experiment_id,experiment_name,group,evacuation_rate_mean,evacuation_rate_std,evacuation_time_mean,evacuation_time_std,max_congestion_mean,max_congestion_std,exit_balance_mean,exit_balance_std,cumulative_reward_mean,cumulative_reward_std,final_mean_reward
+A1_16D_seed123,Full Observation (16D),A,0.9875,0.0000,600.00,0.00,1.0179,0.3095,9.4248,3.1299,1137.77,53.61,0.00
+A1_16D_seed42,Full Observation (16D),A,0.9900,0.0050,516.20,167.60,0.9553,0.1331,10.3621,3.3934,1157.49,134.96,0.00
+A2_8D_seed123,Reduced Observation (8D),A,0.9900,0.0050,516.80,166.40,1.2183,0.2510,8.2917,1.8630,1205.40,99.46,0.00
+A2_8D_seed42,Reduced Observation (8D),A,0.9950,0.0061,360.80,196.81,1.0328,0.2174,8.8032,3.5487,1262.87,138.78,0.00
+A3_6D_seed123,Minimal Observation (6D),A,0.9900,0.0050,514.20,171.60,0.9201,0.2529,9.9165,4.8186,1194.85,145.61,0.00
+A3_6D_seed42,Minimal Observation (6D),A,0.9850,0.0050,600.00,0.00,1.0351,0.2759,9.3048,2.8517,1109.65,37.57,0.00

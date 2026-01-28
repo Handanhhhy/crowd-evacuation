@@ -1,0 +1,20 @@
+baseline: false
+experiment_id: D4_no_gbm_seed42
+experiment_name: No GBM Correction
+gbm_correction:
+  enabled: false
+  weight: 0.0
+group: D
+name: No GBM Correction
+pedestrian_types:
+  type_distribution:
+    CHILD: 0.1
+    ELDERLY: 0.15
+    IMPATIENT: 0.15
+    NORMAL: 0.6
+  use_multi_type: true
+sfm_params:
+  A: 2000.0
+  B: 0.08
+  tau: 0.5
+timestamp: '20260128_162201'

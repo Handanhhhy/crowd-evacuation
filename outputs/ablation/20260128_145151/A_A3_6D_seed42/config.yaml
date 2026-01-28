@@ -1,0 +1,15 @@
+baseline: false
+experiment_id: A3_6D_seed42
+experiment_name: Minimal Observation (6D)
+group: A
+name: Minimal Observation (6D)
+observation_dim: 6
+observation_features:
+  bottleneck_density: false
+  evacuation_rate: false
+  exit_congestion: true
+  exit_density: true
+  flow_direction: false
+  remaining_ratio: false
+  time_ratio: false
+timestamp: '20260128_145151'

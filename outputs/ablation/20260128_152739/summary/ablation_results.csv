@@ -1,0 +1,9 @@
+experiment_id,experiment_name,group,evacuation_rate_mean,evacuation_rate_std,evacuation_time_mean,evacuation_time_std,max_congestion_mean,max_congestion_std,exit_balance_mean,exit_balance_std,cumulative_reward_mean,cumulative_reward_std,final_mean_reward
+B3_no_congestion_seed123,No Congestion Penalty,B,0.9875,0.0000,600.00,0.00,1.0179,0.3095,9.4248,3.1299,1287.22,59.11,0.00
+B3_no_congestion_seed42,No Congestion Penalty,B,0.9900,0.0050,516.20,167.60,0.9553,0.1331,10.3621,3.3934,1315.62,114.91,0.00
+B4_no_balance_seed123,No Balance Penalty,B,0.9900,0.0050,516.80,166.40,1.2183,0.2510,8.2917,1.8630,1354.57,66.70,0.00
+B4_no_balance_seed42,No Balance Penalty,B,0.9950,0.0061,360.80,196.81,1.0328,0.2174,8.8032,3.5487,1378.50,79.58,0.00
+B5_no_flow_efficiency_seed123,No Flow Efficiency Bonus,B,0.9900,0.0050,514.20,171.60,0.9201,0.2529,9.9165,4.8186,1194.85,145.61,0.00
+B5_no_flow_efficiency_seed42,No Flow Efficiency Bonus,B,0.9850,0.0050,600.00,0.00,1.0351,0.2759,9.3048,2.8517,1109.65,37.57,0.00
+B6_no_safety_seed123,No Safety Distance Bonus,B,0.9925,0.0061,457.40,174.70,1.0737,0.1401,9.2124,0.9062,991.74,189.69,0.00
+B6_no_safety_seed42,No Safety Distance Bonus,B,0.9900,0.0050,532.20,135.60,0.8773,0.1513,8.4824,2.3672,931.39,153.40,0.00
