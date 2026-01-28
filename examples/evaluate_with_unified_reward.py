@@ -24,9 +24,11 @@ import yaml
 import argparse
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing as mp
 
 # 添加项目路径
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -250,6 +252,23 @@ def collect_trajectory(
     )
 
 
+def _evaluate_experiment_worker(args: Tuple[str, str, int, int]) -> Optional[dict]:
+    """
+    评估单个实验的 worker 函数（用于多进程）
+
+    Args:
+        args: (exp_id, exp_dir_str, n_episodes, seed)
+
+    Returns:
+        评估结果字典（用于序列化传输）
+    """
+    exp_id, exp_dir_str, n_episodes, seed = args
+    result = evaluate_experiment_unified(exp_id, Path(exp_dir_str), n_episodes, seed)
+    if result:
+        return asdict(result)
+    return None
+
+
 def evaluate_experiment_unified(
     exp_id: str,
     exp_dir: Path,
@@ -268,7 +287,7 @@ def evaluate_experiment_unified(
     Returns:
         统一评估结果
     """
-    print(f"\n评估实验: {exp_id}")
+    print(f"[PID {os.getpid()}] 评估实验: {exp_id}")
 
     # 加载实验配置 (支持 config.yaml 或 experiment_config.json)
     config_file = exp_dir / "config.yaml"
@@ -444,6 +463,8 @@ def main():
                         help="每个实验的评估episode数")
     parser.add_argument("--seed", "-s", type=int, default=42,
                         help="随机种子")
+    parser.add_argument("--workers", "-w", type=int, default=None,
+                        help="并行worker数量 (默认: CPU核心数)")
     args = parser.parse_args()
 
     base_dir = Path(args.dir)
@@ -459,18 +480,39 @@ def main():
         print("未找到B组实验，请先运行消融实验")
         return
 
-    # 评估所有实验
+    # 确定worker数量
+    n_workers = args.workers if args.workers else min(mp.cpu_count(), len(b_experiments))
+    print(f"使用 {n_workers} 个并行worker进行评估")
+
+    # 准备任务参数
+    tasks = [
+        (exp_dir.name, str(exp_dir), args.episodes, args.seed)
+        for exp_dir in b_experiments
+    ]
+
+    # 并行评估所有实验
     results = []
-    for exp_dir in b_experiments:
-        exp_id = exp_dir.name
-        result = evaluate_experiment_unified(
-            exp_id=exp_id,
-            exp_dir=exp_dir,
-            n_episodes=args.episodes,
-            seed=args.seed
-        )
-        if result:
-            results.append(result)
+    if n_workers == 1:
+        # 单进程模式（便于调试）
+        for task in tasks:
+            result_dict = _evaluate_experiment_worker(task)
+            if result_dict:
+                results.append(UnifiedEvalResult(**result_dict))
+    else:
+        # 多进程并行模式
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(_evaluate_experiment_worker, task): task[0]
+                      for task in tasks}
+
+            for future in as_completed(futures):
+                exp_id = futures[future]
+                try:
+                    result_dict = future.result()
+                    if result_dict:
+                        results.append(UnifiedEvalResult(**result_dict))
+                        print(f"  ✓ {exp_id} 完成")
+                except Exception as e:
+                    print(f"  ✗ {exp_id} 失败: {e}")
 
     if not results:
         print("没有成功评估的实验")
@@ -482,4 +524,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # 支持 Windows 多进程
+    mp.set_start_method('spawn', force=True)
     main()
