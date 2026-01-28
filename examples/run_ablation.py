@@ -353,11 +353,20 @@ def create_environment(
     return env
 
 
-def make_env(env_kwargs: Dict[str, Any], seed: int):
-    """创建环境工厂函数 (用于SubprocVecEnv)"""
+def make_env(env_kwargs: Dict[str, Any], seed: int, obs_config: Optional[Dict[str, bool]] = None):
+    """创建环境工厂函数 (用于SubprocVecEnv)
+
+    Args:
+        env_kwargs: 环境参数
+        seed: 随机种子
+        obs_config: 观测空间配置 (A组消融用)
+    """
     def _init():
         env = MetroEvacuationEnv(**env_kwargs)
         env.reset(seed=seed)
+        # A组消融: 应用观测空间包装器
+        if obs_config is not None:
+            env = ObservationWrapper(env, obs_config)
         return env
     return _init
 
@@ -370,7 +379,8 @@ def train_ppo_model(
     output_dir: Path,
     device: str = "auto",
     env_kwargs: Optional[Dict[str, Any]] = None,
-    seed: int = 42
+    seed: int = 42,
+    obs_config: Optional[Dict[str, bool]] = None
 ) -> PPO:
     """
     训练PPO模型
@@ -384,6 +394,7 @@ def train_ppo_model(
         device: 训练设备
         env_kwargs: 环境参数 (用于SubprocVecEnv创建多个环境)
         seed: 随机种子
+        obs_config: 观测空间配置 (A组消融用)
 
     Returns:
         训练好的PPO模型
@@ -398,7 +409,7 @@ def train_ppo_model(
     if env_kwargs is not None and n_envs > 1:
         try:
             vec_env = SubprocVecEnv([
-                make_env(env_kwargs, seed + i) for i in range(n_envs)
+                make_env(env_kwargs, seed + i, obs_config) for i in range(n_envs)
             ])
             print(f"  使用SubprocVecEnv: {n_envs}个并行环境")
         except Exception as e:
@@ -640,6 +651,8 @@ def run_single_experiment(
         use_guidance = guidance_config.get("enabled", True)
 
     if use_guidance and SB3_AVAILABLE:
+        # A组需要传递观测配置给并行环境
+        obs_config = exp_config.get("observation_features") if group == "A" else None
         model = train_ppo_model(
             env=env,
             exp_id=exp_id,
@@ -648,7 +661,8 @@ def run_single_experiment(
             output_dir=logger.output_dir,
             device=device,
             env_kwargs=env_kwargs,
-            seed=seed
+            seed=seed,
+            obs_config=obs_config
         )
 
     # 评估模型
