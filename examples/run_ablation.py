@@ -37,6 +37,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 
 # 添加项目路径
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -733,13 +735,40 @@ def run_ablation_group(
     return results
 
 
+def _run_group_worker(args: Tuple) -> List[ExperimentResult]:
+    """
+    并行执行单个组的工作函数
+
+    Args:
+        args: (group, config, output_dir, experiments, device, run_timestamp)
+
+    Returns:
+        实验结果列表
+    """
+    group, config, output_dir, experiments, device, run_timestamp = args
+    print(f"\n[组{group}] 开始... (进程 {os.getpid()})")
+
+    results = run_ablation_group(
+        group=group,
+        config=config,
+        output_dir=output_dir,
+        experiments=experiments,
+        device=device,
+        run_timestamp=run_timestamp
+    )
+
+    print(f"[组{group}] 完成! 共 {len(results)} 个实验")
+    return results
+
+
 def run_all_ablations(
     config_path: Optional[str] = None,
     output_dir: Optional[str] = None,
     groups: Optional[List[str]] = None,
     experiments: Optional[List[str]] = None,
     timesteps: Optional[int] = None,
-    device: str = "auto"
+    device: str = "auto",
+    n_parallel: int = 1
 ) -> Tuple[List[ExperimentResult], str]:
     """
     运行所有消融实验
@@ -751,6 +780,7 @@ def run_all_ablations(
         experiments: 指定的实验ID列表
         timesteps: 覆盖训练步数
         device: 训练设备
+        n_parallel: 并行运行的组数 (默认1=顺序执行, 0=自动检测CPU核心数)
 
     Returns:
         (所有实验结果列表, 运行时间戳)
@@ -776,29 +806,54 @@ def run_all_ablations(
     if groups is None:
         groups = ["A", "B", "C", "D", "E"]
 
-    all_results = []
+    # 确定并行度
+    if n_parallel == 0:
+        # 自动检测: 使用CPU核心数，但不超过组数
+        n_parallel = min(multiprocessing.cpu_count(), len(groups))
+    n_parallel = min(n_parallel, len(groups))  # 不超过组数
 
     print(f"\n{'#'*60}")
     print(f"消融实验开始")
     print(f"配置: {config_path or 'configs/ablation_configs.yaml'}")
     print(f"输出目录: {output_dir / run_timestamp}")
     print(f"实验组: {groups}")
+    print(f"并行度: {n_parallel} {'(并行)' if n_parallel > 1 else '(顺序)'}")
     print(f"运行时间戳: {run_timestamp}")
     print(f"{'#'*60}")
 
     start_time = time.time()
+    all_results = []
 
-    for group in groups:
-        print(f"\n[组{group}] 开始...")
-        group_results = run_ablation_group(
-            group=group,
-            config=config,
-            output_dir=str(output_dir),
-            experiments=experiments,
-            device=device,
-            run_timestamp=run_timestamp
-        )
-        all_results.extend(group_results)
+    if n_parallel > 1:
+        # 并行执行
+        worker_args = [
+            (group, config, str(output_dir), experiments, device, run_timestamp)
+            for group in groups
+        ]
+
+        with ProcessPoolExecutor(max_workers=n_parallel) as executor:
+            futures = {executor.submit(_run_group_worker, args): args[0] for args in worker_args}
+
+            for future in as_completed(futures):
+                group_name = futures[future]
+                try:
+                    group_results = future.result()
+                    all_results.extend(group_results)
+                except Exception as e:
+                    print(f"[错误] 组{group_name}执行失败: {e}")
+    else:
+        # 顺序执行
+        for group in groups:
+            print(f"\n[组{group}] 开始...")
+            group_results = run_ablation_group(
+                group=group,
+                config=config,
+                output_dir=str(output_dir),
+                experiments=experiments,
+                device=device,
+                run_timestamp=run_timestamp
+            )
+            all_results.extend(group_results)
 
     total_time = time.time() - start_time
     print(f"\n{'#'*60}")
@@ -892,6 +947,13 @@ def main():
         help="随机种子"
     )
 
+    parser.add_argument(
+        "--parallel", "-p",
+        type=int,
+        default=4,
+        help="并行运行的组数 (默认4, 设为1则顺序执行, 设为0则自动检测)"
+    )
+
     args = parser.parse_args()
 
     # 设置随机种子
@@ -905,14 +967,15 @@ def main():
         # 只生成汇总 (自动查找最新的运行目录)
         generate_summary(output_dir)
     else:
-        # 运行实验
+        # 运行实验 (默认并行)
         results, run_timestamp = run_all_ablations(
             config_path=args.config,
             output_dir=output_dir,
             groups=args.groups,
             experiments=args.experiments,
             timesteps=args.timesteps,
-            device=args.device
+            device=args.device,
+            n_parallel=args.parallel
         )
 
         # 生成汇总 (使用本次运行的时间戳)
