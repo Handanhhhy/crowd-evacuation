@@ -20,6 +20,7 @@ Unified Reward Evaluation for B-Group Ablation
 import os
 import sys
 import json
+import yaml
 import argparse
 import numpy as np
 from pathlib import Path
@@ -269,14 +270,19 @@ def evaluate_experiment_unified(
     """
     print(f"\n评估实验: {exp_id}")
 
-    # 加载实验配置
-    config_file = exp_dir / "experiment_config.json"
+    # 加载实验配置 (支持 config.yaml 或 experiment_config.json)
+    config_file = exp_dir / "config.yaml"
     if not config_file.exists():
-        print(f"  配置文件不存在: {config_file}")
+        config_file = exp_dir / "experiment_config.json"
+    if not config_file.exists():
+        print(f"  配置文件不存在: {exp_dir}")
         return None
 
     with open(config_file, 'r') as f:
-        config = json.load(f)
+        if config_file.suffix == '.yaml':
+            config = yaml.safe_load(f)
+        else:
+            config = json.load(f)
 
     # 获取原始奖励权重
     original_weights = config.get("reward_weights", REWARD_DEFAULTS.copy())
