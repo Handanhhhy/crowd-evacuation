@@ -12,7 +12,7 @@ NC='\033[0m' # No Color
 
 # 默认参数
 PARALLEL=${PARALLEL:-4}
-GROUPS=${GROUPS:-"A B C D E"}
+GROUPS=${GROUPS:-""}
 TIMESTEPS=${TIMESTEPS:-""}
 FORCE_RESTART=${FORCE_RESTART:-false}
 
@@ -76,7 +76,7 @@ echo -e "${GREEN}消融实验启动脚本${NC}"
 echo -e "${GREEN}================================${NC}"
 echo "项目目录: $PROJECT_ROOT"
 echo "并行度: $PARALLEL"
-echo "实验组: $GROUPS"
+echo "实验组: ${GROUPS:-A B C D E (默认全部)}"
 
 # 检查是否有正在运行的消融实验
 check_running() {
@@ -138,7 +138,9 @@ LOG_FILE="$LOG_DIR/ablation_${TIMESTAMP}.log"
 # 构建命令
 CMD="python examples/run_ablation.py --parallel $PARALLEL"
 
+# 如果指定了组，添加参数；否则使用Python脚本的默认值（全部组）
 if [ -n "$GROUPS" ]; then
+    # 将空格分隔的字符串转换为多个参数
     CMD="$CMD --groups $GROUPS"
 fi
 
