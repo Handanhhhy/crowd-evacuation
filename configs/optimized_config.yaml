@@ -1,0 +1,131 @@
+# 优化配置文件 (基于消融实验结论)
+# Optimized Configuration Based on Ablation Study Results
+#
+# 主要优化:
+# 1. 观测空间: 16D -> 8D (A组结论: 8D性能更优)
+# 2. 奖励权重: 移除balance_penalty (B组结论: 该惩罚过度)
+# 3. 轨迹预测: 使用线性外推 (C组结论: 与神经网络性能相同)
+#
+# 生成时间: 2026-01-28
+# 基于: outputs/ablation/ablation_analysis_report_20260128.md
+
+# ============================================================
+# 观测空间配置 (A组结论)
+# ============================================================
+observation:
+  # 8D观测空间 (A2_8D实验结论)
+  # 性能优于16D完整观测，疏散时间缩短14-40%
+  dim: 8
+  features:
+    exit_density: true           # [0-2] 3维 - 保留
+    exit_congestion: true        # [3-5] 3维 - 保留
+    flow_direction: false        # 移除 - 噪声特征
+    evacuation_rate: false       # 移除 - 噪声特征
+    bottleneck_density: false    # 移除 - 噪声特征
+    remaining_ratio: true        # [6] 1维 - 保留
+    time_ratio: true             # [7] 1维 - 保留
+
+# ============================================================
+# 奖励权重配置 (B组结论)
+# ============================================================
+reward_weights:
+  # 核心奖励
+  evac_per_person: 12.0          # 疏散奖励 (保留)
+  congestion_penalty: 3.0         # 拥堵惩罚 (保留)
+  time_penalty: 0.2               # 时间惩罚 (保留)
+  completion_bonus: 200.0         # 完成奖励 (保留)
+
+  # 优化后的奖励
+  balance_penalty: 0.0            # 均衡惩罚 -> 移除 (B4结论: 过度惩罚)
+  flow_efficiency_bonus: 1.5      # 人流效率奖励 (保留)
+  safety_distance_bonus: 0.5      # 安全间距奖励 (保留, B6证明重要)
+  guidance_penalty: 0.3           # 引导惩罚 (保留)
+  evacuation_rate_bonus: 2.0      # 疏散速率奖励 (保留)
+  crush_penalty: 10.0             # 踩踏风险惩罚 (保留)
+
+# ============================================================
+# 轨迹预测配置 (C组结论)
+# ============================================================
+trajectory_prediction:
+  # 使用线性外推 (C2实验结论: 与神经网络性能相同，计算更快)
+  method: "linear"
+  use_neural_network: false
+  # 备选: 如需神经网络可改为:
+  # method: "social_lstm"
+  # use_neural_network: true
+  # model_path: "outputs/models/social_lstm.pt"
+
+# ============================================================
+# 行人仿真配置 (D组结论)
+# ============================================================
+pedestrian_simulation:
+  # 多类型行人 (D1结论: 完整配置表现最均衡)
+  use_multi_type: true
+  type_distribution:
+    NORMAL: 0.6
+    ELDERLY: 0.15
+    CHILD: 0.1
+    IMPATIENT: 0.15
+
+  # SFM参数
+  sfm:
+    A: 2000.0                     # 社会力强度 (标准值)
+    B: 0.08                       # 社会力范围
+    tau: 0.5                      # 松弛时间
+
+  # GBM修正 (D4结论: 影响不大，但保留以增加真实性)
+  gbm_correction:
+    enabled: true
+    weight: 0.3
+
+# ============================================================
+# 训练配置 (优化后)
+# ============================================================
+training:
+  # 增加训练步数 (原30k可能未收敛)
+  total_timesteps: 100000         # 推荐值 (原30k不足)
+  n_envs: 4                       # 并行环境数
+  learning_rate: 0.0003
+  n_steps: 1024
+  batch_size: 128
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+
+  # 早停配置
+  early_stopping:
+    enabled: true
+    patience: 10                  # 增加耐心 (原5)
+    min_improvement: 0.005        # 降低阈值
+
+  # 设备配置
+  ppo_device: "cpu"               # PPO+MLP在CPU上更快
+  trajectory_device: "auto"       # 轨迹预测可用GPU
+  use_gpu_sfm: true               # 启用GPU加速SFM
+  sfm_device: "auto"
+
+# ============================================================
+# 评估配置
+# ============================================================
+evaluation:
+  n_eval_episodes: 10             # 增加评估次数 (原5)
+  random_seeds: [42, 123, 456, 789, 1024]  # 增加种子数 (原2)
+
+# ============================================================
+# 环境配置
+# ============================================================
+environment:
+  num_pedestrians: 80
+  max_steps: 600
+  dt: 0.1
+
+# ============================================================
+# 输出配置
+# ============================================================
+output:
+  base_dir: "outputs/optimized"
+  save_model: true
+  save_logs: true
+  save_figures: true

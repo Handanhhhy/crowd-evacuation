@@ -454,6 +454,158 @@ training_config:
 
 ---
 
+## 10. 完整优化方案实施
+
+> 本节记录基于消融实验分析和Codex审查结果实施的完整优化方案
+
+### 10.1 优化方案概述
+
+| 优化项 | 实施内容 | 对应文件 |
+|--------|----------|----------|
+| A. 统一奖励评估 | 用baseline权重重新评估B组实验 | `examples/evaluate_with_unified_reward.py` |
+| B. 8D观测空间 | 修改默认配置为8D | `configs/optimized_config.yaml` |
+| C. 多规模验证 | 添加300/800人场景配置 | `configs/multi_scale_validation.yaml` |
+
+### 10.2 A. 统一奖励评估功能
+
+**问题**: B组实验使用不同奖励权重，cumulative_reward不可比
+
+**解决方案**: 创建统一评估脚本，用B1_full的奖励权重重新计算所有B组实验
+
+**使用方法**:
+
+```bash
+# 评估所有B组实验
+python examples/evaluate_with_unified_reward.py
+
+# 指定输出目录
+python examples/evaluate_with_unified_reward.py --dir outputs/ablation/20260128_162201
+
+# 增加评估episodes
+python examples/evaluate_with_unified_reward.py --episodes 20
+```
+
+**输出**: `outputs/ablation/unified_reward_evaluation.json`
+
+**核心逻辑**:
+
+```python
+# 统一评估核心代码
+BASELINE_REWARD_WEIGHTS = {
+    "evac_per_person": 12.0,
+    "congestion_penalty": 3.0,
+    "time_penalty": 0.2,
+    "completion_bonus": 200.0,
+    "balance_penalty": 0.8,  # B1_full baseline
+    # ...
+}
+
+def compute_unified_reward(trajectory, reward_weights):
+    """用统一权重重新计算奖励"""
+    total_reward = 0.0
+    for step in trajectory:
+        step_reward = 0.0
+        step_reward += step.evacuation_ratio * w["evac_per_person"] * 100
+        step_reward -= step.congestion * w["congestion_penalty"]
+        # ... 其他奖励项
+        total_reward += step_reward
+    return total_reward
+```
+
+### 10.3 B. 优化配置文件
+
+**文件**: `configs/optimized_config.yaml`
+
+**主要修改**:
+
+| 配置项 | 原值 | 优化后 | 依据 |
+|--------|------|--------|------|
+| observation.dim | 16 | 8 | A组: 8D性能更优 |
+| reward_weights.balance_penalty | 0.8 | 0.0 | B组: 过度惩罚 |
+| trajectory_prediction.method | neural | linear | C组: 性能相同 |
+| training.total_timesteps | 30000 | 100000 | 增加训练充分性 |
+
+**使用方法**:
+
+```bash
+# 使用优化配置训练
+python examples/run_ablation.py --config configs/optimized_config.yaml
+
+# 或在代码中加载
+import yaml
+with open("configs/optimized_config.yaml") as f:
+    config = yaml.safe_load(f)
+```
+
+### 10.4 C. 多规模验证实验
+
+**文件**: `configs/multi_scale_validation.yaml`
+
+**验证组**:
+
+| 组ID | 验证内容 | 假设 |
+|------|----------|------|
+| V1 | balance_penalty | 小规模无效，大规模可能有用 |
+| V2 | PPO引导 | 简单场景无优势，复杂场景可能有效 |
+| V3 | 轨迹预测 | 低密度线性够用，高密度神经网络更优 |
+| V4 | 观测维度 | 8D在所有规模下优于16D |
+
+**规模配置**:
+
+| 规模 | 人数 | 预期用途 |
+|------|------|----------|
+| small | 80 | 基线（当前） |
+| medium | 300 | 中等密度验证 |
+| large | 800 | 高密度验证 |
+| extreme | 2000 | 压力测试 |
+
+**使用方法**:
+
+```bash
+# 运行所有验证
+python examples/run_multi_scale_validation.py
+
+# 快速验证（减少训练步数）
+python examples/run_multi_scale_validation.py --quick
+
+# 指定验证组和规模
+python examples/run_multi_scale_validation.py --groups V1 V2 --scales small medium large
+```
+
+**输出**: `outputs/multi_scale/<timestamp>/multi_scale_validation_report.json`
+
+### 10.5 完整优化工作流
+
+```bash
+# Step 1: 修正B组评估方法论问题
+python examples/evaluate_with_unified_reward.py --episodes 10
+
+# Step 2: 使用优化配置重新训练
+python examples/run_ablation.py \
+    --config configs/optimized_config.yaml \
+    --groups A B E \
+    --timesteps 100000
+
+# Step 3: 多规模验证
+python examples/run_multi_scale_validation.py \
+    --groups V1 V2 \
+    --scales small medium large
+
+# Step 4: 生成最终报告
+python examples/run_ablation.py --summary-only
+```
+
+### 10.6 预期改进
+
+| 指标 | 原值 | 预期优化后 | 改进幅度 |
+|------|------|------------|----------|
+| 疏散时间 | 516-600步 | 361-450步 | -20~30% |
+| 训练收敛 | 30k步未收敛 | 100k步收敛 | 更稳定 |
+| 评估可比性 | 不可比 | 统一评估 | 方法论正确 |
+| 规模验证 | 仅80人 | 80-800人 | 结论更可靠 |
+
+---
+
 ## 5. 附录
 
 ### 5.1 实验数据文件位置
@@ -464,8 +616,22 @@ outputs/ablation/
 ├── 20260128_145151/    # A组补跑
 ├── 20260128_152739/    # B组补跑
 ├── 20260128_162201/    # C/D组补跑
-└── ablation_analysis_report_20260128.md  # 本报告
+├── ablation_analysis_report_20260128.md  # 本报告
+└── unified_reward_evaluation.json        # B组统一评估结果 (新增)
+
+outputs/multi_scale/     # 多规模验证输出 (新增)
+└── <timestamp>/
+    └── multi_scale_validation_report.json
 ```
+
+### 5.2 新增配置和脚本文件
+
+| 文件 | 用途 |
+|------|------|
+| `configs/optimized_config.yaml` | 优化后的默认配置 (8D观测空间) |
+| `configs/multi_scale_validation.yaml` | 多规模验证实验配置 |
+| `examples/evaluate_with_unified_reward.py` | B组统一奖励评估脚本 |
+| `examples/run_multi_scale_validation.py` | 多规模验证实验脚本 |
 
 ### 5.2 关键指标说明
 
@@ -488,3 +654,5 @@ outputs/ablation/
 
 *报告生成工具: Claude Code*
 *项目: crowd-evacuation*
+*初次生成: 2026-01-28*
+*最后更新: 2026-01-28 (添加方法论审查、完整优化方案)*

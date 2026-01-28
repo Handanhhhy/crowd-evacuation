@@ -1,0 +1,226 @@
+# 多规模验证实验配置
+# Multi-Scale Validation Configuration
+#
+# 目的: 验证小规模场景(80人)得出的结论在大规模场景下是否成立
+#
+# 关键验证项:
+# 1. balance_penalty在大规模场景的价值
+# 2. PPO引导在复杂场景的效果
+# 3. 神经网络轨迹预测在高密度场景的优势
+#
+# 生成时间: 2026-01-28
+
+# ============================================================
+# 全局配置
+# ============================================================
+global:
+  training:
+    total_timesteps: 100000       # 增加训练步数
+    n_envs: 4
+    learning_rate: 0.0003
+    n_steps: 1024
+    batch_size: 128
+    n_epochs: 10
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    ent_coef: 0.01
+    ppo_device: "cpu"
+    use_gpu_sfm: true
+    sfm_device: "auto"
+
+    early_stopping:
+      enabled: true
+      patience: 10
+      min_improvement: 0.005
+
+  evaluation:
+    n_eval_episodes: 10
+    random_seeds: [42, 123, 456, 789, 1024]
+
+  output:
+    base_dir: "outputs/multi_scale"
+    save_model: true
+    save_logs: true
+    save_figures: true
+
+# ============================================================
+# 场景规模配置
+# ============================================================
+scales:
+  small:
+    name: "小规模 (80人)"
+    description: "当前消融实验规模，作为基线"
+    num_pedestrians: 80
+    max_steps: 600
+    expected_baseline_time: 400-500  # 预期基线疏散时间
+
+  medium:
+    name: "中等规模 (300人)"
+    description: "中等密度，验证出口协调价值"
+    num_pedestrians: 300
+    max_steps: 1200
+    expected_baseline_time: 800-1000
+
+  large:
+    name: "大规模 (800人)"
+    description: "高密度，验证PPO引导和拥堵管理价值"
+    num_pedestrians: 800
+    max_steps: 2000
+    expected_baseline_time: 1500-1800
+
+  extreme:
+    name: "极端规模 (2000人)"
+    description: "极端压力测试，验证系统鲁棒性"
+    num_pedestrians: 2000
+    max_steps: 4000
+    expected_baseline_time: 3000-3500
+
+# ============================================================
+# 验证实验组
+# ============================================================
+validation_groups:
+
+  # V1: balance_penalty验证
+  V1_balance_penalty:
+    description: "验证balance_penalty在不同规模下的价值"
+    hypothesis: "小规模场景balance_penalty无效，但大规模场景可能有用"
+    experiments:
+      V1a_with_balance:
+        name: "含均衡惩罚"
+        reward_weights:
+          balance_penalty: 0.8
+        scales: [small, medium, large]
+
+      V1b_no_balance:
+        name: "无均衡惩罚"
+        reward_weights:
+          balance_penalty: 0.0
+        scales: [small, medium, large]
+
+    metrics_to_compare:
+      - exit_balance       # 出口均衡度
+      - evacuation_time    # 疏散时间
+      - max_congestion     # 最大拥堵
+
+  # V2: PPO引导验证
+  V2_ppo_guidance:
+    description: "验证PPO引导在不同规模下的效果"
+    hypothesis: "小规模场景PPO无优势，但大规模复杂场景可能有效"
+    experiments:
+      V2a_with_guidance:
+        name: "PPO引导"
+        guidance:
+          enabled: true
+          policy_type: "ppo"
+        scales: [small, medium, large]
+
+      V2b_no_guidance:
+        name: "无引导"
+        guidance:
+          enabled: false
+        scales: [small, medium, large]
+
+    metrics_to_compare:
+      - evacuation_rate    # 疏散率
+      - evacuation_time    # 疏散时间
+      - max_congestion     # 最大拥堵
+
+  # V3: 轨迹预测方法验证
+  V3_trajectory_prediction:
+    description: "验证神经网络轨迹预测在高密度场景的价值"
+    hypothesis: "低密度场景线性外推足够，高密度场景神经网络可能更优"
+    experiments:
+      V3a_neural:
+        name: "神经网络预测"
+        trajectory_prediction:
+          use_neural_network: true
+          model_type: "social_lstm"
+        scales: [small, medium, large]
+
+      V3b_linear:
+        name: "线性外推"
+        trajectory_prediction:
+          use_neural_network: false
+          model_type: "linear"
+        scales: [small, medium, large]
+
+    metrics_to_compare:
+      - prediction_error   # 预测误差
+      - evacuation_time    # 疏散时间
+      - collision_count    # 碰撞次数
+
+  # V4: 观测空间维度验证
+  V4_observation_dim:
+    description: "验证8D观测空间在大规模场景的表现"
+    hypothesis: "8D观测空间在所有规模下都优于16D"
+    experiments:
+      V4a_16D:
+        name: "16D完整观测"
+        observation_dim: 16
+        scales: [small, medium, large]
+
+      V4b_8D:
+        name: "8D精简观测"
+        observation_dim: 8
+        scales: [small, medium, large]
+
+    metrics_to_compare:
+      - evacuation_rate
+      - evacuation_time
+      - training_convergence_speed
+
+# ============================================================
+# 统计分析配置
+# ============================================================
+statistical_analysis:
+  # 显著性检验
+  significance_test:
+    method: "paired_t_test"
+    alpha: 0.05
+
+  # 效果量计算
+  effect_size:
+    method: "cohens_d"
+    thresholds:
+      small: 0.2
+      medium: 0.5
+      large: 0.8
+
+  # 多重比较校正
+  multiple_comparison:
+    method: "bonferroni"
+
+# ============================================================
+# 可视化配置
+# ============================================================
+visualization:
+  # 规模对比图
+  scale_comparison:
+    - type: "grouped_bar"
+      x_axis: "scale"
+      hue: "experiment"
+      metrics: ["evacuation_rate", "evacuation_time", "max_congestion"]
+
+    - type: "line"
+      x_axis: "num_pedestrians"
+      hue: "experiment"
+      metrics: ["evacuation_rate", "evacuation_time"]
+
+  # 热力图
+  heatmaps:
+    - type: "scale_metric_heatmap"
+      rows: "scale"
+      cols: "experiment"
+      value: "evacuation_rate"
+
+# ============================================================
+# 输出报告配置
+# ============================================================
+report:
+  format: ["json", "markdown", "csv"]
+  include:
+    - summary_table
+    - statistical_tests
+    - scale_comparison_charts
+    - recommendations
