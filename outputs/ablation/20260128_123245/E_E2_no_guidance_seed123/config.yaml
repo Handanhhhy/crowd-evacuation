@@ -1,0 +1,10 @@
+baseline: false
+experiment_id: E2_no_guidance_seed123
+experiment_name: No Guidance (Free Choice)
+group: E
+guidance:
+  enabled: false
+  model_path: null
+  policy_type: none
+name: No Guidance (Free Choice)
+timestamp: '20260128_123245'

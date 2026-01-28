@@ -1,0 +1,10 @@
+baseline: true
+experiment_id: E1_ppo_guidance_seed123
+experiment_name: PPO-based Guidance
+group: E
+guidance:
+  enabled: true
+  model_path: outputs/models/ppo_metro.zip
+  policy_type: ppo
+name: PPO-based Guidance
+timestamp: '20260128_123245'

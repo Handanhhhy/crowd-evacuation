@@ -1,0 +1,20 @@
+baseline: false
+experiment_id: D2_single_type_seed123
+experiment_name: Single Type Pedestrians Only
+gbm_correction:
+  enabled: true
+  weight: 0.3
+group: D
+name: Single Type Pedestrians Only
+pedestrian_types:
+  type_distribution:
+    CHILD: 0.0
+    ELDERLY: 0.0
+    IMPATIENT: 0.0
+    NORMAL: 1.0
+  use_multi_type: false
+sfm_params:
+  A: 2000.0
+  B: 0.08
+  tau: 0.5
+timestamp: '20260128_123245'

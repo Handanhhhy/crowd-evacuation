@@ -1,0 +1,112 @@
+{
+  "experiment_id": "D1_full_seed123",
+  "experiment_name": "Full SFM + Multi-type Pedestrians",
+  "group": "D",
+  "config": {
+    "name": "Full SFM + Multi-type Pedestrians",
+    "sfm_params": {
+      "A": 2000.0,
+      "B": 0.08,
+      "tau": 0.5
+    },
+    "pedestrian_types": {
+      "use_multi_type": true,
+      "type_distribution": {
+        "NORMAL": 0.6,
+        "ELDERLY": 0.15,
+        "CHILD": 0.1,
+        "IMPATIENT": 0.15
+      }
+    },
+    "gbm_correction": {
+      "enabled": true,
+      "weight": 0.3
+    },
+    "baseline": true
+  },
+  "metrics": {
+    "evacuation_rate": {
+      "mean": 0.99,
+      "std": 0.009354143466934856
+    },
+    "evacuation_time": {
+      "mean": 435.4,
+      "std": 201.62301455935034
+    },
+    "max_congestion": {
+      "mean": 0.9048793733119963,
+      "std": 0.20367582675885187
+    },
+    "exit_balance": {
+      "mean": 9.280442700469061,
+      "std": 2.741865738462585
+    },
+    "cumulative_reward": {
+      "mean": 1227.9603963823886,
+      "std": 153.30945155691538
+    }
+  },
+  "training": {
+    "final_mean_reward": 0.0,
+    "timesteps": 0,
+    "time_seconds": 0.0
+  },
+  "timestamp": "20260128_123245",
+  "episode_details": [
+    {
+      "episode_id": 0,
+      "evacuation_rate": 0.975,
+      "avg_evacuation_time": 600.0,
+      "max_congestion": 0.9288231829802194,
+      "exit_balance": 13.4412301024373,
+      "cumulative_reward": 1075.5849393029903,
+      "episode_length": 600,
+      "avg_speed": 0.0,
+      "guidance_count": 0
+    },
+    {
+      "episode_id": 1,
+      "evacuation_rate": 1.0,
+      "avg_evacuation_time": 183.0,
+      "max_congestion": 0.5665029784043629,
+      "exit_balance": 6.944222218666553,
+      "cumulative_reward": 1446.9140722794098,
+      "episode_length": 183,
+      "avg_speed": 0.0,
+      "guidance_count": 0
+    },
+    {
+      "episode_id": 2,
+      "evacuation_rate": 0.9875,
+      "avg_evacuation_time": 600.0,
+      "max_congestion": 1.2086722950140634,
+      "exit_balance": 8.339997335464536,
+      "cumulative_reward": 1105.0082231395654,
+      "episode_length": 600,
+      "avg_speed": 0.0,
+      "guidance_count": 0
+    },
+    {
+      "episode_id": 3,
+      "evacuation_rate": 1.0,
+      "avg_evacuation_time": 194.0,
+      "max_congestion": 0.9107381304105122,
+      "exit_balance": 6.236095644623235,
+      "cumulative_reward": 1377.9129255802216,
+      "episode_length": 194,
+      "avg_speed": 0.0,
+      "guidance_count": 0
+    },
+    {
+      "episode_id": 4,
+      "evacuation_rate": 0.9875,
+      "avg_evacuation_time": 600.0,
+      "max_congestion": 0.909660279750824,
+      "exit_balance": 11.440668201153676,
+      "cumulative_reward": 1134.381821609755,
+      "episode_length": 600,
+      "avg_speed": 0.0,
+      "guidance_count": 0
+    }
+  ]
+}

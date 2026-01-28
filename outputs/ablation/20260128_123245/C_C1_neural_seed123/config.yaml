@@ -1,0 +1,10 @@
+baseline: true
+experiment_id: C1_neural_seed123
+experiment_name: Neural Network (Social-LSTM)
+group: C
+name: Neural Network (Social-LSTM)
+timestamp: '20260128_123245'
+trajectory_prediction:
+  model_path: outputs/models/social_lstm.pt
+  model_type: social_lstm
+  use_neural_network: true

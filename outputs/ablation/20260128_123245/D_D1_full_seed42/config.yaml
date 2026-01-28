@@ -1,0 +1,20 @@
+baseline: true
+experiment_id: D1_full_seed42
+experiment_name: Full SFM + Multi-type Pedestrians
+gbm_correction:
+  enabled: true
+  weight: 0.3
+group: D
+name: Full SFM + Multi-type Pedestrians
+pedestrian_types:
+  type_distribution:
+    CHILD: 0.1
+    ELDERLY: 0.15
+    IMPATIENT: 0.15
+    NORMAL: 0.6
+  use_multi_type: true
+sfm_params:
+  A: 2000.0
+  B: 0.08
+  tau: 0.5
+timestamp: '20260128_123245'

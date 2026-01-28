@@ -1,0 +1,10 @@
+baseline: false
+experiment_id: C2_linear_seed42
+experiment_name: Linear Extrapolation
+group: C
+name: Linear Extrapolation
+timestamp: '20260128_123245'
+trajectory_prediction:
+  model_path: null
+  model_type: linear
+  use_neural_network: false

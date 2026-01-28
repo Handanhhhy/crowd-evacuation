@@ -1,0 +1,15 @@
+baseline: true
+experiment_id: A1_16D_seed42
+experiment_name: Full Observation (16D)
+group: A
+name: Full Observation (16D)
+observation_dim: 16
+observation_features:
+  bottleneck_density: true
+  evacuation_rate: true
+  exit_congestion: true
+  exit_density: true
+  flow_direction: true
+  remaining_ratio: true
+  time_ratio: true
+timestamp: '20260128_123245'
