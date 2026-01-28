@@ -84,7 +84,8 @@ class ExperimentLogger:
         experiment_name: str,
         group: str,
         output_dir: str,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        run_timestamp: Optional[str] = None
     ):
         """
         初始化实验日志记录器
@@ -95,14 +96,20 @@ class ExperimentLogger:
             group: 实验组 (如 "A")
             output_dir: 输出目录
             config: 实验配置
+            run_timestamp: 运行时间戳 (用于同一次运行的多个实验共享)
         """
         self.experiment_id = experiment_id
         self.experiment_name = experiment_name
         self.group = group
         self.config = config or {}
 
-        # 创建输出目录
-        self.output_dir = Path(output_dir) / f"{group}_{experiment_id.split('_')[0]}_{'_'.join(experiment_id.split('_')[1:])}"
+        # 时间戳 - 使用传入的或生成新的
+        self.timestamp = run_timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # 创建带时间戳的输出目录，避免覆盖历史结果
+        # 结构: outputs/ablation/YYYYMMDD_HHMMSS/A_A1_16D/
+        exp_subdir = f"{group}_{experiment_id.split('_')[0]}_{'_'.join(experiment_id.split('_')[1:])}"
+        self.output_dir = Path(output_dir) / self.timestamp / exp_subdir
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # 训练日志
@@ -110,9 +117,6 @@ class ExperimentLogger:
 
         # 评估结果
         self.episode_metrics: List[EpisodeMetrics] = []
-
-        # 时间戳
-        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         print(f"[ExperimentLogger] 初始化实验: {experiment_id}")
         print(f"[ExperimentLogger] 输出目录: {self.output_dir}")
@@ -389,18 +393,57 @@ class ExperimentLogger:
 class AblationSummaryGenerator:
     """消融实验汇总生成器"""
 
-    def __init__(self, base_output_dir: str):
+    def __init__(self, base_output_dir: str, run_timestamp: Optional[str] = None):
         """
         初始化汇总生成器
 
         Args:
-            base_output_dir: 输出根目录 (如 outputs/ablation)
+            base_output_dir: 输出根目录 (如 outputs/ablation/YYYYMMDD_HHMMSS)
+            run_timestamp: 运行时间戳 (可选，用于定位特定运行)
         """
         self.base_dir = Path(base_output_dir)
-        self.summary_dir = self.base_dir / "summary"
+        self.run_timestamp = run_timestamp
+
+        # 如果 base_dir 已包含时间戳目录，直接使用
+        # 否则，尝试查找最新的时间戳目录
+        if run_timestamp:
+            self.run_dir = self.base_dir / run_timestamp
+        elif self._is_timestamp_dir(self.base_dir.name):
+            # base_dir 本身就是时间戳目录
+            self.run_dir = self.base_dir
+            self.base_dir = self.base_dir.parent
+        else:
+            # 查找最新的时间戳目录
+            self.run_dir = self._find_latest_run_dir()
+
+        self.summary_dir = self.run_dir / "summary"
         self.summary_dir.mkdir(parents=True, exist_ok=True)
 
         self.results: List[ExperimentResult] = []
+
+    def _is_timestamp_dir(self, name: str) -> bool:
+        """检查目录名是否符合时间戳格式 YYYYMMDD_HHMMSS"""
+        import re
+        return bool(re.match(r'^\d{8}_\d{6}$', name))
+
+    def _find_latest_run_dir(self) -> Path:
+        """查找最新的运行目录"""
+        timestamp_dirs = [
+            d for d in self.base_dir.iterdir()
+            if d.is_dir() and self._is_timestamp_dir(d.name)
+        ]
+        if timestamp_dirs:
+            # 按名称排序（时间戳格式可以直接排序）
+            latest = sorted(timestamp_dirs, key=lambda x: x.name, reverse=True)[0]
+            print(f"[AblationSummaryGenerator] 使用最新运行目录: {latest}")
+            return latest
+        else:
+            # 没有时间戳目录，创建新的
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            new_dir = self.base_dir / timestamp
+            new_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[AblationSummaryGenerator] 创建新运行目录: {new_dir}")
+            return new_dir
 
     def add_result(self, result: ExperimentResult):
         """添加实验结果"""
@@ -408,33 +451,38 @@ class AblationSummaryGenerator:
 
     def load_results_from_dir(self):
         """从目录加载所有实验结果"""
-        for group_dir in self.base_dir.iterdir():
-            if group_dir.is_dir() and group_dir.name != "summary":
-                json_path = group_dir / "eval_results.json"
+        # 从当前运行目录加载结果
+        for exp_dir in self.run_dir.iterdir():
+            if exp_dir.is_dir() and exp_dir.name != "summary":
+                json_path = exp_dir / "eval_results.json"
                 if json_path.exists():
-                    with open(json_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
+                    self._load_single_result(json_path)
 
-                    result = ExperimentResult(
-                        experiment_id=data["experiment_id"],
-                        experiment_name=data["experiment_name"],
-                        group=data["group"],
-                        config=data.get("config", {}),
-                        mean_evacuation_rate=data["metrics"]["evacuation_rate"]["mean"],
-                        std_evacuation_rate=data["metrics"]["evacuation_rate"]["std"],
-                        mean_evacuation_time=data["metrics"]["evacuation_time"]["mean"],
-                        std_evacuation_time=data["metrics"]["evacuation_time"]["std"],
-                        mean_max_congestion=data["metrics"]["max_congestion"]["mean"],
-                        std_max_congestion=data["metrics"]["max_congestion"]["std"],
-                        mean_exit_balance=data["metrics"]["exit_balance"]["mean"],
-                        std_exit_balance=data["metrics"]["exit_balance"]["std"],
-                        mean_cumulative_reward=data["metrics"]["cumulative_reward"]["mean"],
-                        std_cumulative_reward=data["metrics"]["cumulative_reward"]["std"],
-                        final_mean_reward=data.get("training", {}).get("final_mean_reward", 0),
-                        timestamp=data.get("timestamp", "")
-                    )
-                    self.results.append(result)
-                    print(f"[加载] {result.experiment_id}")
+    def _load_single_result(self, json_path: Path):
+        """加载单个实验结果"""
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        result = ExperimentResult(
+            experiment_id=data["experiment_id"],
+            experiment_name=data["experiment_name"],
+            group=data["group"],
+            config=data.get("config", {}),
+            mean_evacuation_rate=data["metrics"]["evacuation_rate"]["mean"],
+            std_evacuation_rate=data["metrics"]["evacuation_rate"]["std"],
+            mean_evacuation_time=data["metrics"]["evacuation_time"]["mean"],
+            std_evacuation_time=data["metrics"]["evacuation_time"]["std"],
+            mean_max_congestion=data["metrics"]["max_congestion"]["mean"],
+            std_max_congestion=data["metrics"]["max_congestion"]["std"],
+            mean_exit_balance=data["metrics"]["exit_balance"]["mean"],
+            std_exit_balance=data["metrics"]["exit_balance"]["std"],
+            mean_cumulative_reward=data["metrics"]["cumulative_reward"]["mean"],
+            std_cumulative_reward=data["metrics"]["cumulative_reward"]["std"],
+            final_mean_reward=data.get("training", {}).get("final_mean_reward", 0),
+            timestamp=data.get("timestamp", "")
+        )
+        self.results.append(result)
+        print(f"[加载] {result.experiment_id}")
 
     def generate_summary_csv(self) -> str:
         """

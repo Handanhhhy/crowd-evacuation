@@ -14,7 +14,7 @@
 global:
   # 训练配置
   training:
-    total_timesteps: 50000       # 每组实验训练步数 (从100k减半加速)
+    total_timesteps: 30000       # 优化: 从50000减少到30000 (E组已证明足够收敛)
     n_envs: 4                    # 并行环境数 (SubprocVecEnv)
     learning_rate: 0.0003
     n_steps: 1024
@@ -29,16 +29,21 @@ global:
     # GPU加速SFM (4070ti Super等NVIDIA GPU)
     use_gpu_sfm: true            # 启用GPU加速SFM
     sfm_device: "auto"           # 自动检测 (cuda/mps/cpu)
+    # 早停配置
+    early_stopping:
+      enabled: true              # 启用早停
+      patience: 5                # 无改善的评估次数后停止
+      min_improvement: 0.01      # 最小改善阈值
 
   # 评估配置
   evaluation:
-    n_eval_episodes: 10          # 每个实验评估10个episode
-    random_seeds: [42, 123, 456] # 3个随机种子取平均
+    n_eval_episodes: 5           # 优化: 从10减少到5 (足够统计)
+    random_seeds: [42, 123]      # 优化: 从3个减少到2个 (平衡效率与可靠性)
 
   # 环境配置
   environment:
     num_pedestrians: 80
-    max_steps: 800
+    max_steps: 600               # 优化: 从800减少到600 (多数episode 400步完成)
     dt: 0.1
 
   # 输出配置

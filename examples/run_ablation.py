@@ -146,6 +146,57 @@ class ObservationWrapper(gym.ObservationWrapper):
         return obs[self.feature_indices]
 
 
+class EarlyStoppingCallback(BaseCallback):
+    """
+    早停回调，当训练无改善时提前停止
+
+    Args:
+        patience: 连续无改善的检查次数后停止
+        min_improvement: 最小改善阈值
+        check_freq: 检查频率（步数）
+        verbose: 日志级别
+    """
+
+    def __init__(
+        self,
+        patience: int = 5,
+        min_improvement: float = 0.01,
+        check_freq: int = 2000,
+        verbose: int = 0
+    ):
+        super().__init__(verbose)
+        self.patience = patience
+        self.min_improvement = min_improvement
+        self.check_freq = check_freq
+        self.best_mean_reward = -float('inf')
+        self.no_improve_count = 0
+
+    def _on_step(self) -> bool:
+        if self.n_calls % self.check_freq == 0:
+            # 获取当前平均奖励
+            if len(self.model.ep_info_buffer) > 0:
+                mean_reward = np.mean([ep["r"] for ep in self.model.ep_info_buffer])
+
+                # 检查是否有改善
+                if mean_reward > self.best_mean_reward + self.min_improvement:
+                    self.best_mean_reward = mean_reward
+                    self.no_improve_count = 0
+                    if self.verbose > 0:
+                        print(f"[EarlyStop] 新最佳奖励: {mean_reward:.2f}")
+                else:
+                    self.no_improve_count += 1
+                    if self.verbose > 0:
+                        print(f"[EarlyStop] 无改善 ({self.no_improve_count}/{self.patience})")
+
+                # 达到耐心上限，停止训练
+                if self.no_improve_count >= self.patience:
+                    if self.verbose > 0:
+                        print(f"[EarlyStop] 早停触发! 最佳奖励: {self.best_mean_reward:.2f}")
+                    return False
+
+        return True
+
+
 class TrainingCallback(BaseCallback):
     """训练回调，用于记录训练指标"""
 
@@ -382,14 +433,26 @@ def train_ppo_model(
     )
 
     # 训练回调
-    callback = TrainingCallback(logger, log_freq=1000)
+    callbacks = [TrainingCallback(logger, log_freq=1000)]
+
+    # 早停回调（可选）
+    early_stop_config = train_config.get("early_stopping", {})
+    if early_stop_config.get("enabled", False):
+        early_stop_callback = EarlyStoppingCallback(
+            patience=early_stop_config.get("patience", 5),
+            min_improvement=early_stop_config.get("min_improvement", 0.01),
+            check_freq=2000,
+            verbose=1
+        )
+        callbacks.append(early_stop_callback)
+        print("  启用早停机制")
 
     # 训练
     total_timesteps = train_config.get("total_timesteps", 100000)
     print(f"\n[训练] 开始训练 {exp_id}, 总步数: {total_timesteps}")
 
     start_time = time.time()
-    model.learn(total_timesteps=total_timesteps, callback=callback)
+    model.learn(total_timesteps=total_timesteps, callback=callbacks)
     training_time = time.time() - start_time
 
     print(f"[训练] 完成! 耗时: {training_time:.1f}秒")
@@ -457,9 +520,12 @@ def evaluate_model(
             else:
                 base_env = env
 
+            # 优化: 只检查最新的拥堵值，避免O(T²)每步扫描整个历史
             if hasattr(base_env, 'history') and 'congestion' in base_env.history:
-                if base_env.history['congestion']:
-                    max_congestion = max(max_congestion, max(base_env.history['congestion']))
+                history = base_env.history['congestion']
+                if history:
+                    # 只取最新值与当前max比较，而非每步重新扫描整个历史
+                    max_congestion = max(max_congestion, history[-1])
 
         # 计算指标
         if hasattr(env, 'unwrapped'):
@@ -522,7 +588,8 @@ def run_single_experiment(
     global_config: Dict[str, Any],
     output_dir: str,
     seed: int = 42,
-    device: str = "auto"
+    device: str = "auto",
+    run_timestamp: Optional[str] = None
 ) -> ExperimentResult:
     """
     运行单个消融实验
@@ -535,6 +602,7 @@ def run_single_experiment(
         output_dir: 输出目录
         seed: 随机种子
         device: 训练设备
+        run_timestamp: 运行时间戳 (用于同一批次实验共享目录)
 
     Returns:
         实验结果
@@ -545,13 +613,14 @@ def run_single_experiment(
     print(f"组: {group}, 种子: {seed}")
     print(f"{'='*60}")
 
-    # 创建日志记录器
+    # 创建日志记录器 (使用共享时间戳避免覆盖)
     logger = ExperimentLogger(
         experiment_id=exp_id,
         experiment_name=exp_name,
         group=group,
         output_dir=output_dir,
-        config=exp_config
+        config=exp_config,
+        run_timestamp=run_timestamp
     )
 
     # 构建环境参数 (用于SubprocVecEnv并行创建)
@@ -607,7 +676,8 @@ def run_ablation_group(
     config: Dict[str, Any],
     output_dir: str,
     experiments: Optional[List[str]] = None,
-    device: str = "auto"
+    device: str = "auto",
+    run_timestamp: Optional[str] = None
 ) -> List[ExperimentResult]:
     """
     运行一个消融实验组
@@ -618,6 +688,7 @@ def run_ablation_group(
         output_dir: 输出目录
         experiments: 指定的实验ID列表 (可选)
         device: 训练设备
+        run_timestamp: 运行时间戳 (用于同一批次实验共享目录)
 
     Returns:
         实验结果列表
@@ -654,7 +725,8 @@ def run_ablation_group(
                 global_config=global_config,
                 output_dir=output_dir,
                 seed=seed,
-                device=device
+                device=device,
+                run_timestamp=run_timestamp
             )
             results.append(result)
 
@@ -668,7 +740,7 @@ def run_all_ablations(
     experiments: Optional[List[str]] = None,
     timesteps: Optional[int] = None,
     device: str = "auto"
-) -> List[ExperimentResult]:
+) -> Tuple[List[ExperimentResult], str]:
     """
     运行所有消融实验
 
@@ -681,7 +753,7 @@ def run_all_ablations(
         device: 训练设备
 
     Returns:
-        所有实验结果
+        (所有实验结果列表, 运行时间戳)
     """
     # 加载配置
     config = load_ablation_config(config_path)
@@ -697,6 +769,9 @@ def run_all_ablations(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # 生成本次运行的时间戳 (所有实验共享，避免覆盖历史结果)
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     # 确定要运行的组
     if groups is None:
         groups = ["A", "B", "C", "D", "E"]
@@ -706,8 +781,9 @@ def run_all_ablations(
     print(f"\n{'#'*60}")
     print(f"消融实验开始")
     print(f"配置: {config_path or 'configs/ablation_configs.yaml'}")
-    print(f"输出目录: {output_dir}")
+    print(f"输出目录: {output_dir / run_timestamp}")
     print(f"实验组: {groups}")
+    print(f"运行时间戳: {run_timestamp}")
     print(f"{'#'*60}")
 
     start_time = time.time()
@@ -719,28 +795,31 @@ def run_all_ablations(
             config=config,
             output_dir=str(output_dir),
             experiments=experiments,
-            device=device
+            device=device,
+            run_timestamp=run_timestamp
         )
         all_results.extend(group_results)
 
     total_time = time.time() - start_time
     print(f"\n{'#'*60}")
     print(f"所有实验完成! 总耗时: {total_time/3600:.2f}小时")
+    print(f"结果保存到: {output_dir / run_timestamp}")
     print(f"{'#'*60}")
 
-    return all_results
+    return all_results, run_timestamp
 
 
-def generate_summary(output_dir: str):
+def generate_summary(output_dir: str, run_timestamp: Optional[str] = None):
     """
     生成汇总报告
 
     Args:
-        output_dir: 输出目录
+        output_dir: 输出根目录
+        run_timestamp: 运行时间戳 (可选，用于定位特定运行目录)
     """
     print("\n[汇总] 生成汇总报告...")
 
-    summary_gen = AblationSummaryGenerator(output_dir)
+    summary_gen = AblationSummaryGenerator(output_dir, run_timestamp=run_timestamp)
     summary_gen.load_results_from_dir()
     summary_gen.generate_all()
 
@@ -823,11 +902,11 @@ def main():
     output_dir = args.output_dir or "outputs/ablation"
 
     if args.summary_only:
-        # 只生成汇总
+        # 只生成汇总 (自动查找最新的运行目录)
         generate_summary(output_dir)
     else:
         # 运行实验
-        results = run_all_ablations(
+        results, run_timestamp = run_all_ablations(
             config_path=args.config,
             output_dir=output_dir,
             groups=args.groups,
@@ -836,9 +915,9 @@ def main():
             device=args.device
         )
 
-        # 生成汇总
+        # 生成汇总 (使用本次运行的时间戳)
         if results:
-            generate_summary(output_dir)
+            generate_summary(output_dir, run_timestamp=run_timestamp)
 
     print("\n完成!")
 
